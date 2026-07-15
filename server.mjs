@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile, appendFile, mkdir, stat } from 'node:fs/promises';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { join, normalize, extname } from 'node:path';
+import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import nodemailer from 'nodemailer';
@@ -9,7 +9,7 @@ import nodemailer from 'nodemailer';
 try { process.loadEnvFile?.('.env'); } catch { /* .env is optional for local development */ }
 
 const root = fileURLToPath(new URL('.', import.meta.url));
-const dataDir = join(root, 'data');
+const dataDir = process.env.PORTAL_DATA_DIR ? resolve(process.env.PORTAL_DATA_DIR) : join(root, 'data');
 await mkdir(dataDir, { recursive: true });
 const db = new DatabaseSync(join(dataDir, 'portal.db'));
 db.exec(`
@@ -31,6 +31,15 @@ db.exec(`
     first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, authorized_until TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
+  CREATE TABLE IF NOT EXISTS captive_sessions (
+    token_hash TEXT PRIMARY KEY, mac_address TEXT NOT NULL, client_ip TEXT,
+    gateway_id TEXT, user_id TEXT,
+    access_type TEXT NOT NULL CHECK(access_type IN ('high_speed','limited')),
+    created_at TEXT NOT NULL, login_expires_at TEXT NOT NULL,
+    authorized_at TEXT, authorized_until TEXT, revoked_at TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_captive_sessions_mac ON captive_sessions(mac_address);
   CREATE TABLE IF NOT EXISTS portal_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1), welcome_title TEXT NOT NULL,
     welcome_text TEXT NOT NULL, limited_bandwidth_kbps INTEGER NOT NULL DEFAULT 512,
@@ -58,7 +67,9 @@ const config = {
   reyeeMode: process.env.REYEE_AUTH_MODE || 'mock', // mock | redirect
   reyeeUserParam: process.env.REYEE_USERNAME_PARAM || 'username',
   reyeePasswordParam: process.env.REYEE_PASSWORD_PARAM || 'password',
-  reyeePostUrlParam: process.env.REYEE_POST_URL_PARAM || 'post_url'
+  reyeePostUrlParam: process.env.REYEE_POST_URL_PARAM || 'post_url',
+  wifiDogTokenTtlSeconds: Number(process.env.WIFIDOG_TOKEN_TTL_SECONDS || 300),
+  wifiDogSessionHours: Number(process.env.WIFIDOG_SESSION_HOURS || 12)
 };
 const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({ host:config.smtpHost, port:config.smtpPort, secure:config.smtpSecure, auth:{ user:config.smtpUser, pass:config.smtpPassword } }) : null;
 const id = () => randomBytes(16).toString('hex');
@@ -99,24 +110,35 @@ function trackClient(context) {
       gateway_id=COALESCE(excluded.gateway_id,clients.gateway_id),
       last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, context.gw_id, now, now);
 }
-function wifiDogAuthorization(context, profile) {
+function wifiDogAuthorization(context, profile, userId) {
   if (!context.gw_address || !context.gw_port) return null;
-  // ReyeeOS WiFiDog uses an auth-server query instead of a browser token. Once
-  // the session is stored, revisiting the original URL makes the gateway query
-  // /auth/wifidogAuth/auth and receive Auth: 1.
-  if (!context.token && context.client_mac && context.orig_url) return { mode:'redirect', protocol:'reyee-wifidog', url:context.orig_url, profile };
-  if (!context.token) return null;
   const port = Number(context.gw_port);
   const gateway = String(context.gw_address).trim();
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[a-zA-Z0-9.:[\]-]+$/.test(gateway)) return null;
+  const mac = String(context.client_mac || '').trim().toLowerCase();
+  if (!mac) return null;
+  const token = randomBytes(32).toString('hex');
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const tokenTtl = Number.isFinite(config.wifiDogTokenTtlSeconds) && config.wifiDogTokenTtlSeconds > 0 ? config.wifiDogTokenTtlSeconds : 300;
+  const loginExpiresAt = new Date(now.getTime() + tokenTtl * 1000).toISOString();
+  const revokedRetention = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  db.prepare(`DELETE FROM captive_sessions WHERE
+    (authorized_at IS NULL AND login_expires_at < ?) OR
+    (authorized_at IS NOT NULL AND authorized_until < ?) OR
+    (revoked_at IS NOT NULL AND revoked_at < ?)`).run(nowIso, nowIso, revokedRetention);
+  db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE mac_address=? AND revoked_at IS NULL').run(nowIso, mac);
+  db.prepare(`INSERT INTO captive_sessions
+    (token_hash,mac_address,client_ip,gateway_id,user_id,access_type,created_at,login_expires_at)
+    VALUES (?,?,?,?,?,?,?,?)`).run(hashToken(token), mac, context.client_ip, context.gw_id, userId, profile, nowIso, loginExpiresAt);
   const host = gateway.includes(':') && !gateway.startsWith('[') ? `[${gateway}]` : gateway;
   const url = new URL(`http://${host}:${port}/wifidog/auth`);
-  url.searchParams.set('token', context.token);
-  return { mode: 'redirect', protocol: 'wifidog', url: url.toString(), profile };
+  url.searchParams.set('token', token);
+  return { mode: 'redirect', protocol: 'wifidog', url: url.toString(), profile, tokenExpiresAt: loginExpiresAt };
 }
-function authorize(context, profile, username) {
+function authorize(context, profile, username, userId = null) {
   if (config.reyeeMode !== 'redirect') return { mode: 'mock', profile, message: `Otorisasi ${profile} disimulasikan. Atur REYEE_AUTH_MODE=redirect untuk gateway.` };
-  const wifiDog = wifiDogAuthorization(context, profile);
+  const wifiDog = wifiDogAuthorization(context, profile, userId);
   if (wifiDog) return wifiDog;
   if (!context.login_url) return { mode: 'mock', profile, message: 'Data redirect dari gateway belum diterima.' };
   const url = new URL(context.login_url);
@@ -129,8 +151,50 @@ function writeLog(userId, context, accessType) {
   trackClient(context);
   const now = new Date().toISOString();
   db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,timestamp) VALUES (?,?,?,?,?,?,?)').run(id(), userId, context.client_mac, context.client_ip, accessType, context.ssid, now);
-  const authorizedUntil = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
-  if (context.client_mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=?, authorized_until=? WHERE mac_address=?').run(userId, accessType, 'authorized', now, authorizedUntil, String(context.client_mac).toLowerCase());
+  if (context.client_mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=?, authorized_until=NULL WHERE mac_address=?').run(userId, accessType, 'pending', now, String(context.client_mac).toLowerCase());
+}
+
+function confirmWifiDogSession(url) {
+  const stage = String(url.searchParams.get('stage') || '').toLowerCase();
+  const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
+  trackClient(context);
+  const mac = String(context.client_mac || '').trim().toLowerCase();
+  const rawToken = String(url.searchParams.get('token') || '');
+  const now = new Date();
+  const nowIso = now.toISOString();
+
+  if (stage === 'logout') {
+    if (rawToken) db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
+    if (mac) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL,last_seen_at=? WHERE mac_address=?").run(nowIso, mac);
+    return false;
+  }
+
+  if (stage === 'login') {
+    if (!rawToken || !mac) return false;
+    const session = db.prepare('SELECT * FROM captive_sessions WHERE token_hash=?').get(hashToken(rawToken));
+    const gatewayMatches = !session?.gateway_id || !context.gw_id || session.gateway_id === context.gw_id;
+    const canLogin = session && !session.revoked_at && session.mac_address === mac && gatewayMatches &&
+      ((session.authorized_at && session.authorized_until > nowIso) || (!session.authorized_at && session.login_expires_at > nowIso));
+    if (!canLogin) return false;
+    const sessionHours = Number.isFinite(config.wifiDogSessionHours) && config.wifiDogSessionHours > 0 ? config.wifiDogSessionHours : 12;
+    const authorizedAt = session.authorized_at || nowIso;
+    const authorizedUntil = session.authorized_until || new Date(now.getTime() + sessionHours * 60 * 60 * 1000).toISOString();
+    db.prepare('UPDATE captive_sessions SET authorized_at=?,authorized_until=? WHERE token_hash=?').run(authorizedAt, authorizedUntil, hashToken(rawToken));
+    db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=? WHERE mac_address=?`)
+      .run(session.user_id, session.access_type, nowIso, authorizedUntil, mac);
+    return true;
+  }
+
+  if (rawToken) {
+    const session = db.prepare('SELECT mac_address,authorized_at,authorized_until,revoked_at FROM captive_sessions WHERE token_hash=?').get(hashToken(rawToken));
+    return !!(session && !session.revoked_at && session.authorized_at && session.authorized_until > nowIso && (!mac || session.mac_address === mac));
+  }
+
+  if (!mac) return false;
+  const client = db.prepare('SELECT auth_status,authorized_until FROM clients WHERE mac_address=?').get(mac);
+  const valid = client?.auth_status === 'authorized' && client.authorized_until && client.authorized_until > nowIso;
+  if (client?.auth_status === 'authorized' && !valid) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL WHERE mac_address=?").run(mac);
+  return !!valid;
 }
 async function sendVerification(email, token) {
   const link = `${config.baseUrl}/?verify=${token}`;
@@ -179,13 +243,13 @@ async function api(req, res, url) {
     const { token, context } = await body(req); const user = db.prepare('SELECT id,email FROM users WHERE verification_token=?').get(hashToken(token || ''));
     if (!user) return json(res, 400, { error: 'Tautan verifikasi tidak valid atau sudah digunakan.' });
     db.prepare('UPDATE users SET is_verified=1, verification_token=NULL WHERE id=?').run(user.id); const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed');
-    return json(res, 200, { message: 'Email terverifikasi.', authorization: authorize(captive, 'high_speed', user.email) });
+    return json(res, 200, { message: 'Email terverifikasi.', authorization: authorize(captive, 'high_speed', user.email, user.id) });
   }
   if (route === '/api/auth/login' && req.method === 'POST') {
     const { email, password, context } = await body(req); const user = db.prepare('SELECT * FROM users WHERE email=?').get(String(email || '').toLowerCase().trim());
     if (!user || !verifyPassword(password || '', user.password_hash)) return json(res, 401, { error: 'Email atau kata sandi tidak tepat.' });
     if (!user.is_verified) return json(res, 403, { error: 'Email belum terverifikasi. Periksa inbox Anda.' });
-    const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email), user: { name: user.full_name, email: user.email } });
+    const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email, user.id), user: { name: user.full_name, email: user.email } });
   }
   if (route === '/api/captive/limited' && req.method === 'POST') { const { context } = await body(req); const captive = contextFrom(context); const setting = db.prepare('SELECT limited_bandwidth_kbps FROM portal_settings WHERE id=1').get(); writeLog(null, captive, 'limited'); return json(res, 200, { bandwidthKbps: setting.limited_bandwidth_kbps, authorization: authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`) }); }
   if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true, email:config.adminEmail }, { 'set-cookie': adminCookie(`${encodedEmail}.${sig}`) }); }
@@ -222,13 +286,10 @@ const server = createServer(async (req, res) => {
     if (wifiDogPath === '/auth/wifidogAuth/auth/' || wifiDogPath === '/auth/wifidogAuth/auth') {
       const stage = url.searchParams.get('stage');
       if (stage === 'check') return text(res, 200, 'Auth: 1\n'); // Gateway health probe.
-      const client = contextFrom(Object.fromEntries(url.searchParams.entries()));
-      trackClient(client);
-      const mac = String(client.client_mac || '').toLowerCase();
-      const session = mac && db.prepare("SELECT auth_status,authorized_until FROM clients WHERE mac_address=?").get(mac);
-      const valid = session?.auth_status === 'authorized' && session.authorized_until && session.authorized_until > new Date().toISOString();
-      if (session?.auth_status === 'authorized' && !valid) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL WHERE mac_address=?").run(mac);
-      return text(res, 200, valid ? 'Auth: 1\n' : 'Auth: 0\n');
+      return text(res, 200, confirmWifiDogSession(url) ? 'Auth: 1\n' : 'Auth: 0\n');
+    }
+    if (wifiDogPath === '/auth/wifidogAuth/portal/' || wifiDogPath === '/auth/wifidogAuth/portal') {
+      res.writeHead(302, { location: `${config.baseUrl}/?connected=1` }); return res.end();
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
     let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/') ? '/index.html' : url.pathname;

@@ -7,7 +7,7 @@ const isAdminView = location.pathname === '/admin' || location.pathname === '/ad
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
 let verificationToken = new URLSearchParams(location.search).get('verify');
 let pendingVerificationEmail = '';
-async function api(path, payload) { const response = await fetch(path, { method: payload ? 'POST' : 'GET', credentials:'same-origin', headers: payload ? { 'content-type': 'application/json' } : undefined, body: payload ? JSON.stringify(payload) : undefined }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
+async function api(path, payload) { const response = await fetch(path, { method: payload ? 'POST' : 'GET', credentials:'same-origin', headers: payload ? { 'content-type': 'application/json' } : undefined, body: payload ? JSON.stringify(payload) : undefined }); const raw = await response.text(); let result; try { result = JSON.parse(raw); } catch { throw new Error(response.ok ? 'Respons server portal tidak valid.' : `Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); } if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
 let portalSettings = {};
 const gatewaySsid = String(captiveContext.ssid || captiveContext.SSID || '').trim();
@@ -34,6 +34,7 @@ function showLeadForm() { $('#portal-screen').classList.add('show-form'); show('
 function showUserLogin() { show('userLogin'); }
 function connectToWifi(withLead) { $('#success-message').textContent = withLead ? 'Data Anda telah tersimpan dan akses internet sudah aktif. Selamat berselancar.' : 'Akses internet Anda sudah aktif. Selamat berselancar dengan WiFi gratis PerumNet.'; show('success'); }
 function connectLimited() { show('limited'); }
+if (new URLSearchParams(location.search).get('connected') === '1') connectToWifi(false);
 const escapeHtml = value => String(value ?? '—').replace(/[&<>'"]/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
 const formatTime = value => value ? new Date(value).toLocaleString('id-ID', { dateStyle:'medium', timeStyle:'short' }) : '—';
 async function loadAdminLeads() {
