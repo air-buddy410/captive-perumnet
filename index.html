@@ -8,13 +8,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <section id="portal-screen" class="portal-page active">
         <div class="portal-visual" aria-hidden="true">
-          <div class="brand brand-light"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
+          <div class="brand brand-light"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div>
           <div class="visual-copy">
             <span class="eyebrow light">WiFi yang terhubung dengan pelanggan Anda</span>
             <h1>Lebih dari sekadar<br /><em>internet gratis.</em></h1>
@@ -25,7 +25,7 @@
         </div>
 
         <div class="portal-form-wrap" id="portal-form-wrap">
-          <div class="mobile-brand brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
+          <div class="mobile-brand brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div>
           <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b data-wifi-name>PerumNet Guest</b></div>
           <div class="form-heading"><span class="eyebrow">Buat akun PerumNet</span><h2>Dapatkan akses tanpa batas.</h2><p>Daftar sekali, verifikasi email, lalu nikmati koneksi High Speed setiap kali berkunjung.</p></div>
           <form id="lead-form" novalidate>
@@ -43,7 +43,7 @@
           <a class="admin-link" href="#admin" id="admin-trigger">Masuk sebagai admin</a>
         </div>
         <div class="access-choice-wrap" id="access-choice">
-          <div class="mobile-brand brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
+          <div class="mobile-brand brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div>
           <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b data-wifi-name>PerumNet Guest</b></div>
           <span class="eyebrow">Pilih akses Anda</span><h2 id="portal-title">Internet sesuai kebutuhan Anda.</h2><p id="portal-copy" class="choice-intro">Pilih akses cepat untuk pengalaman penuh, atau langsung terhubung dengan kecepatan terbatas.</p>
           <form class="quick-login" id="quick-login-form"><div class="quick-login-heading"><b>Sudah punya akun?</b><span>Login langsung untuk akses High Speed</span></div><div class="quick-login-fields"><label>Email / Username<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Kata sandi" required /></label><button type="submit">Login <span>→</span></button></div></form>
@@ -85,28 +85,28 @@
       </section>
 
       <section id="user-login-screen" class="login-page">
-        <div class="login-card"><div class="brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Akun pelanggan</span><h2>Masuk untuk internet cepat</h2><p>Gunakan akun yang telah terverifikasi untuk memperoleh akses High Speed.</p>
+        <div class="login-card"><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Akun pelanggan</span><h2>Masuk untuk internet cepat</h2><p>Gunakan akun yang telah terverifikasi untuk memperoleh akses High Speed.</p>
           <form id="user-login-form"><label>Email<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Masukkan kata sandi" required /></label><button class="primary-button">Masuk & Sambungkan <span>→</span></button></form><button class="text-button" id="back-from-user-login">← Kembali ke pilihan akses</button>
         </div>
       </section>
 
       <section id="login-screen" class="login-page">
-        <div class="login-card"><div class="brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Area administrator</span><h2>Masuk ke dashboard</h2><p>Kelola data pengunjung dan tampilan portal PerumNet Anda.</p>
+        <div class="login-card"><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Area administrator</span><h2>Masuk ke dashboard</h2><p>Kelola data pengunjung dan tampilan portal PerumNet Anda.</p>
           <form id="login-form"><label>Email<input type="email" value="it@perumnet.id" autocomplete="username" required /></label><label>Kata sandi<input type="password" autocomplete="current-password" required /></label><button class="primary-button">Masuk ke Dashboard <span>→</span></button></form><button class="text-button" id="back-portal">← Kembali ke portal</button>
         </div>
       </section>
 
       <section id="dashboard-screen" class="dashboard-page">
-        <aside class="sidebar"><div class="brand brand-light"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><div class="workspace"><span class="avatar">PN</span><div><b>PerumNet</b><small>Portal WiFi</small></div><span>⌄</span></div><nav><a class="nav-item active" data-tab="leads"><span>▦</span> Data Pengunjung</a><a class="nav-item" data-tab="settings"><span>⚙</span> Pengaturan Portal</a></nav><div class="sidebar-bottom"><a><span>?</span> Pusat Bantuan</a><a id="logout"><span>⇥</span> Keluar</a><p>PerumNet Portal <small>v1.0.0</small></p></div></aside>
+        <aside class="sidebar"><div class="brand brand-light"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><div class="workspace"><span class="avatar">PN</span><div><b>PerumNet</b><small>Portal WiFi</small></div><span>⌄</span></div><nav><a class="nav-item active" data-tab="leads"><span>▦</span> Data Pengunjung</a><a class="nav-item" data-tab="settings"><span>⚙</span> Pengaturan Portal</a></nav><div class="sidebar-bottom"><a><span>?</span> Pusat Bantuan</a><a id="logout"><span>⇥</span> Keluar</a><p>PerumNet Portal <small>v1.0.0</small></p></div></aside>
         <div class="dash-content">
           <header class="dash-header"><div><span id="dash-date">Data akses terbaru</span><h2 id="dash-title">Data Pengunjung</h2></div><div class="admin-profile"><span class="bell">♢</span><span class="avatar">AD</span><div><b>Administrator</b><small id="admin-email">it@perumnet.id</small></div></div></header>
           <div id="leads-tab" class="tab-content active"><div class="stats"><article><div class="stat-symbol teal">◉</div><div><small>Total Perangkat</small><b id="total-leads">0</b><em class="neutral">Terdeteksi oleh gateway</em></div></article><article><div class="stat-symbol orange">◷</div><div><small>Aktif Hari Ini</small><b id="today-leads">0</b><em class="neutral">Aktivitas perangkat hari ini</em></div></article><article><div class="stat-symbol blue">⌁</div><div><small>Sudah Otorisasi</small><b id="authorized-leads">0</b><em class="neutral">Akses portal tercatat</em></div></article></div>
             <div class="table-card"><div class="table-heading"><div><h3>Daftar Perangkat</h3><p>Data langsung dari gateway Reyee dan portal WiFi.</p></div><button id="export-csv" class="outline-button">⇩ Ekspor CSV</button></div><div class="table-tools"><label class="search"><span>⌕</span><input id="search-input" placeholder="Cari nama, MAC, IP, atau SSID..." /></label></div><div class="table-scroll"><table><thead><tr><th>Pengunjung / Perangkat</th><th>IP Klien</th><th>Status Akses</th><th>SSID</th><th>Terakhir Terlihat</th><th></th></tr></thead><tbody id="lead-rows"></tbody></table></div><footer class="table-footer"><span id="result-count">Memuat data perangkat…</span></footer></div>
           </div>
-          <div id="settings-tab" class="tab-content"><div class="settings-layout"><div><span class="eyebrow">Personalisasi portal</span><h2>Tampilan Portal WiFi</h2><p class="subcopy">SSID aktif terdeteksi otomatis dari gateway. Nama default hanya digunakan saat portal dibuka tanpa konteks gateway.</p><form id="settings-form" class="settings-form"><label>Nama WiFi default<input id="setting-wifi" value="PerumNet Guest" /></label><label>Judul sambutan<input id="setting-title" value="Terhubung dalam hitungan detik." /></label><label>Pesan pembuka<textarea id="setting-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</textarea></label><label>Batas one-click (Kbps)<input id="setting-bandwidth" type="number" min="64" max="100000" value="512" required /></label><label>Syarat & Ketentuan<textarea id="setting-terms">Saya setuju dengan Syarat & Ketentuan serta pengolahan data untuk informasi dan penawaran.</textarea></label><button class="primary-button">Simpan Perubahan <span>→</span></button></form></div><div class="portal-preview"><small>PRATINJAU</small><div class="mini-portal"><div class="mini-brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><div class="mini-signal">⌁</div><h3 id="preview-title">Terhubung dalam hitungan detik.</h3><p id="preview-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</p><div class="mini-input"></div><div class="mini-input"></div><div class="mini-button">Dapatkan Akses WiFi →</div></div></div></div></div>
+          <div id="settings-tab" class="tab-content"><div class="settings-layout"><div><span class="eyebrow">Personalisasi portal</span><h2>Tampilan Portal WiFi</h2><p class="subcopy">SSID aktif terdeteksi otomatis dari gateway. Nama default hanya digunakan saat portal dibuka tanpa konteks gateway.</p><form id="settings-form" class="settings-form"><label>Nama WiFi default<input id="setting-wifi" value="PerumNet Guest" /></label><label>Judul sambutan<input id="setting-title" value="Terhubung dalam hitungan detik." /></label><label>Pesan pembuka<textarea id="setting-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</textarea></label><label>Batas one-click (Kbps)<input id="setting-bandwidth" type="number" min="64" max="100000" value="512" required /></label><label>Syarat & Ketentuan<textarea id="setting-terms">Saya setuju dengan Syarat & Ketentuan serta pengolahan data untuk informasi dan penawaran.</textarea></label><button class="primary-button">Simpan Perubahan <span>→</span></button></form></div><div class="portal-preview"><small>PRATINJAU</small><div class="mini-portal"><div class="mini-brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><div class="mini-signal">⌁</div><h3 id="preview-title">Terhubung dalam hitungan detik.</h3><p id="preview-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</p><div class="mini-input"></div><div class="mini-input"></div><div class="mini-button">Dapatkan Akses WiFi →</div></div></div></div></div>
         </div>
       </section>
     </main>
-    <script src="app.js"></script>
+    <script src="/app.js"></script>
   </body>
 </html>
