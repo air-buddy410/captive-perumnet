@@ -23,6 +23,13 @@ db.exec(`
     access_type TEXT NOT NULL CHECK(access_type IN ('high_speed','limited')),
     ssid TEXT, timestamp TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
   );
+  CREATE TABLE IF NOT EXISTS clients (
+    mac_address TEXT PRIMARY KEY, client_ip TEXT, ssid TEXT, gateway_id TEXT,
+    user_id TEXT, access_type TEXT CHECK(access_type IN ('high_speed','limited')),
+    auth_status TEXT NOT NULL DEFAULT 'pending' CHECK(auth_status IN ('pending','authorized')),
+    first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
   CREATE TABLE IF NOT EXISTS portal_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1), welcome_title TEXT NOT NULL,
     welcome_text TEXT NOT NULL, limited_bandwidth_kbps INTEGER NOT NULL DEFAULT 512,
@@ -70,6 +77,18 @@ function contextFrom(value = {}) {
     token: value.token || null
   };
 }
+function trackClient(context) {
+  const mac = String(context.client_mac || '').trim().toLowerCase();
+  if (!mac) return;
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO clients (mac_address,client_ip,ssid,gateway_id,first_seen_at,last_seen_at)
+    VALUES (?,?,?,?,?,?)
+    ON CONFLICT(mac_address) DO UPDATE SET
+      client_ip=COALESCE(excluded.client_ip,clients.client_ip),
+      ssid=COALESCE(excluded.ssid,clients.ssid),
+      gateway_id=COALESCE(excluded.gateway_id,clients.gateway_id),
+      last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, context.gw_id, now, now);
+}
 function wifiDogAuthorization(context, profile) {
   if (!context.gw_address || !context.gw_port || !context.token) return null;
   const port = Number(context.gw_port);
@@ -91,7 +110,12 @@ function authorize(context, profile, username) {
   if (context.orig_url) url.searchParams.set(config.reyeePostUrlParam, context.orig_url);
   return { mode: 'redirect', url: url.toString(), profile };
 }
-function writeLog(userId, context, accessType) { db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,timestamp) VALUES (?,?,?,?,?,?,?)').run(id(), userId, context.client_mac, context.client_ip, accessType, context.ssid, new Date().toISOString()); }
+function writeLog(userId, context, accessType) {
+  trackClient(context);
+  const now = new Date().toISOString();
+  db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,timestamp) VALUES (?,?,?,?,?,?,?)').run(id(), userId, context.client_mac, context.client_ip, accessType, context.ssid, now);
+  if (context.client_mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=? WHERE mac_address=?').run(userId, accessType, 'authorized', now, String(context.client_mac).toLowerCase());
+}
 async function sendVerification(email, token) { const link = `${config.baseUrl}/?verify=${token}`; await appendFile(join(dataDir, 'email-outbox.ndjson'), JSON.stringify({ to: email, type: 'verify-email', link, createdAt: new Date().toISOString() }) + '\n'); return link; }
 
 async function api(req, res, url) {
@@ -125,7 +149,17 @@ async function api(req, res, url) {
   if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true, email:config.adminEmail }, { 'set-cookie': adminCookie(`${encodedEmail}.${sig}`) }); }
   if (route === '/api/admin/session' && req.method === 'GET') { if (!adminSession(req)) return json(res, 401, { error: 'Sesi admin diperlukan.' }); return json(res, 200, { ok:true, email:config.adminEmail }); }
   if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
-  if (route === '/api/admin/leads' && req.method === 'GET') { if (!requireAdmin(req,res)) return; const rows = db.prepare(`SELECT l.id,l.access_type,l.mac_address,l.client_ip,l.ssid,l.timestamp,u.full_name,u.email,u.phone_number,u.address,u.is_verified FROM access_logs l LEFT JOIN users u ON u.id=l.user_id ORDER BY l.timestamp DESC LIMIT 250`).all(); return json(res, 200, rows); }
+  if (route === '/api/admin/clients' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    const rows = db.prepare(`SELECT c.mac_address,c.client_ip,c.ssid,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,
+      u.full_name,u.email,u.phone_number,u.address,u.is_verified
+      FROM clients c LEFT JOIN users u ON u.id=c.user_id
+      ORDER BY c.last_seen_at DESC LIMIT 250`).all();
+    const today = new Date().toISOString().slice(0,10);
+    const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
+      SUM(CASE WHEN auth_status='authorized' THEN 1 ELSE 0 END) AS authorized FROM clients`).get(today);
+    return json(res, 200, { clients:rows, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
+  }
   if (route === '/api/admin/settings' && req.method === 'POST') { if (!requireAdmin(req,res)) return; const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId,defaultSsid } = await body(req); db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,default_ssid=?,updated_at=? WHERE id=1').run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, String(defaultSsid || 'PerumNet Guest').trim(), new Date().toISOString()); return json(res, 200, { ok: true }); }
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
 }
@@ -144,9 +178,13 @@ const server = createServer(async (req, res) => {
     }
     if (wifiDogPath === '/auth/wifidogAuth/ping/' || wifiDogPath === '/auth/wifidogAuth/ping') return text(res, 200, 'Pong');
     if (wifiDogPath === '/auth/wifidogAuth/auth/' || wifiDogPath === '/auth/wifidogAuth/auth') {
-      // check is a gateway health probe; query asks whether an unauthenticated
-      // station already has a session. No session is granted at this stage.
-      return text(res, 200, url.searchParams.get('stage') === 'check' ? 'Auth: 1\n' : 'Auth: 0\n');
+      const stage = url.searchParams.get('stage');
+      if (stage === 'check') return text(res, 200, 'Auth: 1\n'); // Gateway health probe.
+      const client = contextFrom(Object.fromEntries(url.searchParams.entries()));
+      trackClient(client);
+      const mac = String(client.client_mac || '').toLowerCase();
+      const session = mac && db.prepare("SELECT auth_status FROM clients WHERE mac_address=?").get(mac);
+      return text(res, 200, session?.auth_status === 'authorized' ? 'Auth: 1\n' : 'Auth: 0\n');
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
     let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/') ? '/index.html' : url.pathname;
