@@ -243,3 +243,50 @@ body.admin-view .sidebar a.sidebar-brand:focus-visible{border-radius:10px;box-sh
 @media(max-width:1100px){.scope-bar{grid-template-columns:1fr 1fr}.scope-intro{grid-column:1/-1}.gateway-grid{grid-template-columns:1fr}.network-page-heading{align-items:flex-start;flex-direction:column}.network-layout{grid-template-columns:1fr 1fr}.network-totals{width:100%}.network-totals>span{flex:1}}
 @media(max-width:760px){.scope-bar{grid-template-columns:1fr;gap:11px;padding:14px}.scope-intro{grid-column:auto}.scope-bar select{min-height:42px;font-size:12px}.network-page-heading{margin-bottom:17px}.network-page-heading h2{font-size:22px}.network-totals{gap:6px}.network-totals>span{min-width:0;padding:9px 6px}.network-totals b{font-size:17px}.network-layout{grid-template-columns:1fr}.network-guide{padding:20px}.gateway-section{padding:17px 13px}.gateway-section-heading{align-items:flex-start;flex-direction:column}.gateway-card>header,.gateway-form{padding:15px}.gateway-form-grid{grid-template-columns:1fr}.gateway-card-footer{align-items:stretch;flex-direction:column}.gateway-card-footer button{width:100%;padding:11px}.network-cell{text-align:right}.network-cell small{max-width:190px}body.admin-view tbody td:first-child .network-cell{text-align:left}}
 @media(max-width:420px){.network-totals small{font-size:7px}.network-totals>span{border-radius:9px}.project-form{padding:17px}.gateway-card h3{font-size:13px}.gateway-card code{max-width:210px}}
+
+/* Final mobile containment: multi-gateway desktop table must never widen the page. */
+@media(max-width:760px){
+  body.admin-view{width:100%;max-width:100%;overflow-x:hidden}
+  body.admin-view.sidebar-open{overflow:hidden}
+  body.admin-view .app-shell,
+  body.admin-view .dashboard-page.active,
+  body.admin-view .dash-content,
+  body.admin-view .dash-content>.tab-content.active,
+  body.admin-view .scope-bar,
+  body.admin-view .stats,
+  body.admin-view .table-card,
+  body.admin-view .table-scroll,
+  body.admin-view .settings-layout,
+  body.admin-view .network-layout,
+  body.admin-view .gateway-section,
+  body.admin-view .gateway-grid{width:100%;min-width:0;max-width:100%}
+  body.admin-view .dashboard-page.active{overflow-x:hidden}
+  body.admin-view .stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0 0 18px;padding:0;overflow:visible;scroll-snap-type:none}
+  body.admin-view .stats article{min-width:0;padding:14px;scroll-snap-align:none}
+  body.admin-view .stats article:last-child{grid-column:1/-1}
+  body.admin-view .stats .stat-symbol{flex:0 0 36px;width:36px;height:36px}
+  body.admin-view .stats small{font-size:10px}
+  body.admin-view .stats em{font-size:8px;line-height:1.4}
+  body.admin-view .table-scroll{padding:0 12px 13px;overflow:hidden}
+  body.admin-view table{display:block;width:100%;min-width:0;max-width:100%;background:transparent}
+  body.admin-view tbody{display:grid;width:100%;min-width:0;max-width:100%;gap:12px}
+  body.admin-view tbody tr{display:block;width:100%;min-width:0;max-width:100%}
+  body.admin-view tbody td{box-sizing:border-box;max-width:100%;overflow-wrap:anywhere}
+  body.admin-view tbody td:not(:first-child):before{flex-basis:96px}
+  body.admin-view .network-cell{min-width:0;max-width:calc(100% - 114px);overflow-wrap:anywhere;text-align:right}
+  body.admin-view .network-cell b{overflow-wrap:anywhere}
+  body.admin-view .network-cell small{max-width:100%;overflow-wrap:anywhere;white-space:normal}
+  body.admin-view .device-cell{max-width:100%;word-break:break-word}
+}
+@media(max-width:420px){
+  body.admin-view .dash-header{gap:9px;padding-inline:12px}
+  body.admin-view .dash-header h2{font-size:18px}
+  body.admin-view .admin-profile>.avatar{display:none}
+  body.admin-view .stats article{gap:9px;padding:12px}
+  body.admin-view .stats b{font-size:20px}
+  body.admin-view .stats .stat-symbol{flex-basis:33px;width:33px;height:33px;font-size:16px}
+  body.admin-view .table-card{border-radius:12px}
+  body.admin-view tbody td{gap:12px;padding:9px 12px}
+  body.admin-view tbody td:not(:first-child):before{flex-basis:88px}
+  body.admin-view .network-cell{max-width:calc(100% - 100px)}
+}

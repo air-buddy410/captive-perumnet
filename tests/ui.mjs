@@ -50,5 +50,9 @@ assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpo
 assert.match(css, /\.notification-panel\.open/, 'Panel notifikasi harus memiliki state terbuka yang jelas.');
 assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif khusus.');
 assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
+const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1580px}');
+const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:block;width:100%;min-width:0;max-width:100%');
+assert.ok(mobileGatewayTableReset > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel multi-gateway.');
+assert.match(css, /body\.admin-view \.stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'Statistik mobile harus tampil tanpa carousel horizontal yang terpotong.');
 
 console.log('Responsive UI contract: PASS');
