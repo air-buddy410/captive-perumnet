@@ -12,6 +12,7 @@ const child = spawn(process.execPath, ['server.mjs'], {
     ...process.env,
     PORT:String(port), APP_BASE_URL:baseUrl, PORTAL_DATA_DIR:dataDir,
     REYEE_AUTH_MODE:'redirect', NODE_ENV:'test',
+    WIFIDOG_LIMITED_SESSION_HOURS:'0.0005',
     SMTP_HOST:'', SMTP_USER:'', SMTP_PASSWORD:'', EMAIL_FROM:''
   },
   stdio: ['ignore', 'pipe', 'pipe']
@@ -38,6 +39,7 @@ try {
   });
   const limited = await limitedResponse.json();
   assert(limitedResponse.status === 200, 'One-click harus berhasil.');
+  assert(limited.sessionHours === 0.0005, 'Durasi one-click harus mengikuti konfigurasi limited.');
   assert(limited.authorization?.protocol === 'wifidog', 'Respons harus memakai protokol WiFiDog.');
   const gatewayUrl = new URL(limited.authorization.url);
   const token = gatewayUrl.searchParams.get('token');
@@ -54,6 +56,9 @@ try {
   assert(queryAfter.body === 'Auth: 1\n', 'Query session aktif harus diizinkan.');
   const counters = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
   assert(counters.body === 'Auth: 1\n', 'Counters dengan token aktif harus diizinkan.');
+  await new Promise(resolve => setTimeout(resolve, 1900));
+  const queryExpired = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
+  assert(queryExpired.body === 'Auth: 0\n', 'Session limited harus ditutup setelah durasinya habis.');
   const logout = await request(`/auth/wifidogAuth/auth/?stage=logout&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
   assert(logout.body === 'Auth: 0\n', 'Logout harus mencabut session.');
   const queryLoggedOut = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);

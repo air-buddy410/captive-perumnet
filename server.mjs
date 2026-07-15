@@ -69,7 +69,8 @@ const config = {
   reyeePasswordParam: process.env.REYEE_PASSWORD_PARAM || 'password',
   reyeePostUrlParam: process.env.REYEE_POST_URL_PARAM || 'post_url',
   wifiDogTokenTtlSeconds: Number(process.env.WIFIDOG_TOKEN_TTL_SECONDS || 300),
-  wifiDogSessionHours: Number(process.env.WIFIDOG_SESSION_HOURS || 12)
+  wifiDogSessionHours: Number(process.env.WIFIDOG_SESSION_HOURS || 12),
+  wifiDogLimitedSessionHours: Number(process.env.WIFIDOG_LIMITED_SESSION_HOURS || 2)
 };
 const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({ host:config.smtpHost, port:config.smtpPort, secure:config.smtpSecure, auth:{ user:config.smtpUser, pass:config.smtpPassword } }) : null;
 const id = () => randomBytes(16).toString('hex');
@@ -78,6 +79,11 @@ const text = (res, status, value, headers = {}) => res.writeHead(status, { 'cont
 const hashPassword = (password) => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 const verifyPassword = (password, stored) => { const [salt, key] = stored.split(':'); const actual = scryptSync(password, salt, 64).toString('hex'); return timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(key, 'hex')); };
 const hashToken = (token) => createHash('sha256').update(token).digest('hex');
+function sessionHoursFor(accessType) {
+  const configured = accessType === 'limited' ? config.wifiDogLimitedSessionHours : config.wifiDogSessionHours;
+  const fallback = accessType === 'limited' ? 2 : 12;
+  return Number.isFinite(configured) && configured > 0 ? configured : fallback;
+}
 const cookie = (req, name) => Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(v => v.trim().split('=')))[name];
 function adminSession(req) { const value = cookie(req, 'perumnet_admin'); if (!value) return false; const [encodedEmail, signature] = value.split('.'); const email = Buffer.from(encodedEmail || '', 'base64url').toString(); return email === config.adminEmail && signature === createHash('sha256').update(`${email}:${config.sessionSecret}`).digest('hex'); }
 function adminCookie(value, maxAge = 60 * 60 * 24 * 7) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
@@ -134,7 +140,7 @@ function wifiDogAuthorization(context, profile, userId) {
   const host = gateway.includes(':') && !gateway.startsWith('[') ? `[${gateway}]` : gateway;
   const url = new URL(`http://${host}:${port}/wifidog/auth`);
   url.searchParams.set('token', token);
-  return { mode: 'redirect', protocol: 'wifidog', url: url.toString(), profile, tokenExpiresAt: loginExpiresAt };
+  return { mode: 'redirect', protocol: 'wifidog', url: url.toString(), profile, sessionHours:sessionHoursFor(profile), tokenExpiresAt: loginExpiresAt };
 }
 function authorize(context, profile, username, userId = null) {
   if (config.reyeeMode !== 'redirect') return { mode: 'mock', profile, message: `Otorisasi ${profile} disimulasikan. Atur REYEE_AUTH_MODE=redirect untuk gateway.` };
@@ -176,7 +182,7 @@ function confirmWifiDogSession(url) {
     const canLogin = session && !session.revoked_at && session.mac_address === mac && gatewayMatches &&
       ((session.authorized_at && session.authorized_until > nowIso) || (!session.authorized_at && session.login_expires_at > nowIso));
     if (!canLogin) return false;
-    const sessionHours = Number.isFinite(config.wifiDogSessionHours) && config.wifiDogSessionHours > 0 ? config.wifiDogSessionHours : 12;
+    const sessionHours = sessionHoursFor(session.access_type);
     const authorizedAt = session.authorized_at || nowIso;
     const authorizedUntil = session.authorized_until || new Date(now.getTime() + sessionHours * 60 * 60 * 1000).toISOString();
     db.prepare('UPDATE captive_sessions SET authorized_at=?,authorized_until=? WHERE token_hash=?').run(authorizedAt, authorizedUntil, hashToken(rawToken));
@@ -213,7 +219,10 @@ async function sendVerification(email, token) {
 
 async function api(req, res, url) {
   const route = url.pathname;
-  if (route === '/api/settings' && req.method === 'GET') return json(res, 200, db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid FROM portal_settings WHERE id=1').get());
+  if (route === '/api/settings' && req.method === 'GET') {
+    const settings = db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid FROM portal_settings WHERE id=1').get();
+    return json(res, 200, { ...settings, limited_session_hours:sessionHoursFor('limited') });
+  }
   if (route === '/api/auth/register' && req.method === 'POST') {
     const { fullName, email, phone, address, password, consent, context } = await body(req);
     if (!fullName || !email || !phone || !address || !password || !consent) return json(res, 400, { error: 'Lengkapi data pendaftaran dan persetujuan.' });
@@ -251,7 +260,7 @@ async function api(req, res, url) {
     if (!user.is_verified) return json(res, 403, { error: 'Email belum terverifikasi. Periksa inbox Anda.' });
     const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email, user.id), user: { name: user.full_name, email: user.email } });
   }
-  if (route === '/api/captive/limited' && req.method === 'POST') { const { context } = await body(req); const captive = contextFrom(context); const setting = db.prepare('SELECT limited_bandwidth_kbps FROM portal_settings WHERE id=1').get(); writeLog(null, captive, 'limited'); return json(res, 200, { bandwidthKbps: setting.limited_bandwidth_kbps, authorization: authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`) }); }
+  if (route === '/api/captive/limited' && req.method === 'POST') { const { context } = await body(req); const captive = contextFrom(context); const setting = db.prepare('SELECT limited_bandwidth_kbps FROM portal_settings WHERE id=1').get(); writeLog(null, captive, 'limited'); const authorization = authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`); return json(res, 200, { bandwidthKbps:setting.limited_bandwidth_kbps, sessionHours:sessionHoursFor('limited'), authorization }); }
   if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true, email:config.adminEmail }, { 'set-cookie': adminCookie(`${encodedEmail}.${sig}`) }); }
   if (route === '/api/admin/session' && req.method === 'GET') { if (!adminSession(req)) return json(res, 401, { error: 'Sesi admin diperlukan.' }); return json(res, 200, { ok:true, email:config.adminEmail }); }
   if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
