@@ -6,7 +6,7 @@ Jalankan aplikasi:
 npm run dev
 ```
 
-Portal tersedia di `http://localhost:3000`. SQLite dibuat otomatis di `data/portal.db`; email verifikasi development dicatat di `data/email-outbox.ndjson`.
+Portal tersedia di `http://localhost:3000`. Saat deployment, gunakan `https://hotspot.perumnet.id` sebagai `APP_BASE_URL`. SQLite dibuat otomatis di `data/portal.db`; email verifikasi development dicatat di `data/email-outbox.ndjson`.
 
 ## Integrasi Ruijie Reyee EG
 
