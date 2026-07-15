@@ -8,7 +8,12 @@ const port = 32000 + Math.floor(Math.random() * 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 const child = spawn(process.execPath, ['server.mjs'], {
   cwd: new URL('..', import.meta.url),
-  env: { ...process.env, PORT:String(port), APP_BASE_URL:baseUrl, PORTAL_DATA_DIR:dataDir, REYEE_AUTH_MODE:'redirect', NODE_ENV:'test' },
+  env: {
+    ...process.env,
+    PORT:String(port), APP_BASE_URL:baseUrl, PORTAL_DATA_DIR:dataDir,
+    REYEE_AUTH_MODE:'redirect', NODE_ENV:'test',
+    SMTP_HOST:'', SMTP_USER:'', SMTP_PASSWORD:'', EMAIL_FROM:''
+  },
   stdio: ['ignore', 'pipe', 'pipe']
 });
 let serverError = '';
