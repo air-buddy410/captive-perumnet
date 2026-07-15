@@ -1,15 +1,19 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [html, css, app] = await Promise.all([
+const [html, css, app, favicon] = await Promise.all([
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../styles.css', import.meta.url), 'utf8'),
-  readFile(new URL('../app.js', import.meta.url), 'utf8')
+  readFile(new URL('../app.js', import.meta.url), 'utf8'),
+  readFile(new URL('../assets/perumnet-favicon.png', import.meta.url))
 ]);
 
 assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Status koneksi harus memakai modal.');
 assert.match(html, /id="user-login-screen" class="login-page portal-modal"/, 'Login pelanggan harus memakai modal.');
 assert.match(html, /id="sidebar-toggle"/, 'Dashboard harus menyediakan tombol navigasi mobile.');
+assert.match(html, /rel="icon"[^>]*perumnet-favicon\.png/, 'Portal harus menggunakan favicon PerumNet.');
+assert.ok(favicon.length > 1000 && favicon.subarray(1,4).toString() === 'PNG', 'Aset favicon harus berupa PNG yang valid.');
+assert.match(html, /class="sidebar-brand brand brand-light" href="https:\/\/hotspot\.perumnet\.id"/, 'Logo sidebar harus kembali ke portal hotspot.');
 assert.match(html, /class="nav-icon"[^>]*viewBox="0 0 24 24"/, 'Sidebar harus memakai ikon SVG yang konsisten.');
 assert.match(html, /class="header-action"[^>]*id="notification-toggle"[^>]*title="Notifikasi"/, 'Header admin harus memakai tombol notifikasi SVG.');
 assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel aktivitas pelanggan.');
