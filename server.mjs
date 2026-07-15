@@ -131,7 +131,10 @@ async function api(req, res, url) {
 }
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.svg':'image/svg+xml' };
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, config.baseUrl);
+  // A request-target beginning with // is treated as a host by WHATWG URL.
+  // ReyeeOS sends exactly that form for WiFiDog, so keep it as a path.
+  const requestUrl = req.url.startsWith('//') ? `/${req.url.replace(/^\/+/, '')}` : req.url;
+  const url = new URL(requestUrl, config.baseUrl);
   try {
     // Reyee WiFiDog appends these paths to the Auth Server URL. A leading double
     // slash is normal in ReyeeOS redirects, so normalize it before matching.
