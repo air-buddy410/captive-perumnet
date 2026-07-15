@@ -43,6 +43,14 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS revoked_clients (
     mac_hash TEXT PRIMARY KEY, revoked_at TEXT NOT NULL, expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY, event_key TEXT NOT NULL UNIQUE,
+    type TEXT NOT NULL CHECK(type IN ('client_login','client_offline')),
+    client_mac TEXT, user_id TEXT, title TEXT NOT NULL, message TEXT NOT NULL,
+    created_at TEXT NOT NULL, read_at TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at DESC);
   CREATE TABLE IF NOT EXISTS portal_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1), welcome_title TEXT NOT NULL,
     welcome_text TEXT NOT NULL, limited_bandwidth_kbps INTEGER NOT NULL DEFAULT 512,
@@ -73,7 +81,8 @@ const config = {
   reyeePostUrlParam: process.env.REYEE_POST_URL_PARAM || 'post_url',
   wifiDogTokenTtlSeconds: Number(process.env.WIFIDOG_TOKEN_TTL_SECONDS || 300),
   wifiDogSessionHours: Number(process.env.WIFIDOG_SESSION_HOURS || 12),
-  wifiDogLimitedSessionHours: Number(process.env.WIFIDOG_LIMITED_SESSION_HOURS || 2)
+  wifiDogLimitedSessionHours: Number(process.env.WIFIDOG_LIMITED_SESSION_HOURS || 2),
+  clientOfflineMinutes: Number(process.env.CLIENT_OFFLINE_MINUTES || 20)
 };
 const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({ host:config.smtpHost, port:config.smtpPort, secure:config.smtpSecure, auth:{ user:config.smtpUser, pass:config.smtpPassword } }) : null;
 const id = () => randomBytes(16).toString('hex');
@@ -129,6 +138,49 @@ function trackClient(context) {
       ssid=COALESCE(excluded.ssid,clients.ssid),
       gateway_id=COALESCE(excluded.gateway_id,clients.gateway_id),
       last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, context.gw_id, now, now);
+}
+function clientIdentity(userId, macAddress) {
+  const user = userId ? db.prepare('SELECT full_name,email FROM users WHERE id=?').get(userId) : null;
+  const mac = String(macAddress || '').trim().toLowerCase();
+  return {
+    name:user?.full_name || `Perangkat ${mac ? mac.slice(-8).toUpperCase() : 'tamu'}`,
+    detail:user?.email || mac || 'Pelanggan WiFi'
+  };
+}
+function createClientNotification(type, { macAddress, userId = null, accessType = null, eventKey, reason = '' }) {
+  if (!eventKey) return;
+  const identity = clientIdentity(userId, macAddress);
+  const accessLabel = accessType === 'high_speed' ? 'High Speed' : accessType === 'limited' ? 'Limited' : 'WiFi';
+  const title = type === 'client_login' ? 'Pelanggan terhubung' : 'Pelanggan offline';
+  const message = type === 'client_login'
+    ? `${identity.name} login dan terhubung dengan akses ${accessLabel}.`
+    : `${identity.name} sudah offline${reason === 'session-expired' ? ' karena masa akses berakhir' : ''}.`;
+  db.prepare(`INSERT OR IGNORE INTO notifications
+    (id,event_key,type,client_mac,user_id,title,message,created_at)
+    VALUES (?,?,?,?,?,?,?,?)`).run(id(), eventKey, type, macAddress || null, userId, title, message, new Date().toISOString());
+}
+function markClientOffline(macAddress, reason = 'heartbeat-missing') {
+  const mac = String(macAddress || '').trim().toLowerCase();
+  if (!mac) return false;
+  const client = db.prepare('SELECT user_id,access_type,auth_status,authorized_until FROM clients WHERE mac_address=?').get(mac);
+  if (!client || client.auth_status !== 'authorized') return false;
+  db.prepare("UPDATE clients SET auth_status='pending' WHERE mac_address=?").run(mac);
+  createClientNotification('client_offline', {
+    macAddress:mac, userId:client.user_id, accessType:client.access_type,
+    eventKey:`offline:${mac}:${client.authorized_until || new Date().toISOString()}`, reason
+  });
+  return true;
+}
+function sweepOfflineClients(now = new Date()) {
+  const nowIso = now.toISOString();
+  const configured = Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20;
+  const heartbeatDeadline = new Date(now.getTime() - configured * 60 * 1000).toISOString();
+  const staleClients = db.prepare(`SELECT mac_address,authorized_until,last_seen_at FROM clients
+    WHERE auth_status='authorized' AND (authorized_until<=? OR last_seen_at<?)`).all(nowIso, heartbeatDeadline);
+  for (const client of staleClients) {
+    markClientOffline(client.mac_address, client.authorized_until <= nowIso ? 'session-expired' : 'heartbeat-missing');
+  }
+  return staleClients.length;
 }
 function clearClientRevocation(macAddress) {
   const mac = String(macAddress || '').trim().toLowerCase();
@@ -203,7 +255,7 @@ function confirmWifiDogSession(url) {
 
   if (stage === 'logout') {
     if (rawToken) db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
-    if (mac) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL,last_seen_at=? WHERE mac_address=?").run(nowIso, mac);
+    markClientOffline(mac, 'logout');
     return false;
   }
 
@@ -215,23 +267,30 @@ function confirmWifiDogSession(url) {
       ((session.authorized_at && session.authorized_until > nowIso) || (!session.authorized_at && session.login_expires_at > nowIso));
     if (!canLogin) return false;
     const sessionHours = sessionHoursFor(session.access_type);
+    const firstAuthorization = !session.authorized_at;
     const authorizedAt = session.authorized_at || nowIso;
     const authorizedUntil = session.authorized_until || new Date(now.getTime() + sessionHours * 60 * 60 * 1000).toISOString();
     db.prepare('UPDATE captive_sessions SET authorized_at=?,authorized_until=? WHERE token_hash=?').run(authorizedAt, authorizedUntil, hashToken(rawToken));
     db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=? WHERE mac_address=?`)
       .run(session.user_id, session.access_type, nowIso, authorizedUntil, mac);
+    if (firstAuthorization) createClientNotification('client_login', {
+      macAddress:mac, userId:session.user_id, accessType:session.access_type,
+      eventKey:`login:${hashToken(rawToken)}`
+    });
     return true;
   }
 
   if (rawToken) {
     const session = db.prepare('SELECT mac_address,authorized_at,authorized_until,revoked_at FROM captive_sessions WHERE token_hash=?').get(hashToken(rawToken));
-    return !!(session && !session.revoked_at && session.authorized_at && session.authorized_until > nowIso && (!mac || session.mac_address === mac));
+    const valid = !!(session && !session.revoked_at && session.authorized_at && session.authorized_until > nowIso && (!mac || session.mac_address === mac));
+    if (session?.authorized_at && !valid && session.mac_address === mac) markClientOffline(mac, 'session-expired');
+    return valid;
   }
 
   if (!mac) return false;
   const client = db.prepare('SELECT auth_status,authorized_until FROM clients WHERE mac_address=?').get(mac);
   const valid = client?.auth_status === 'authorized' && client.authorized_until && client.authorized_until > nowIso;
-  if (client?.auth_status === 'authorized' && !valid) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL WHERE mac_address=?").run(mac);
+  if (client?.auth_status === 'authorized' && !valid) markClientOffline(mac, 'session-expired');
   return !!valid;
 }
 
@@ -246,11 +305,13 @@ function deleteClientRecords(macAddress) {
   db.exec('BEGIN IMMEDIATE');
   try {
     if (userId) {
+      db.prepare('DELETE FROM notifications WHERE user_id=? OR client_mac=?').run(userId, mac);
       db.prepare('DELETE FROM captive_sessions WHERE user_id=? OR mac_address=?').run(userId, mac);
       db.prepare('DELETE FROM access_logs WHERE user_id=? OR mac_address=?').run(userId, mac);
       db.prepare('DELETE FROM clients WHERE user_id=? OR mac_address=?').run(userId, mac);
       db.prepare('DELETE FROM users WHERE id=?').run(userId);
     } else {
+      db.prepare('DELETE FROM notifications WHERE client_mac=?').run(mac);
       db.prepare('DELETE FROM captive_sessions WHERE mac_address=?').run(mac);
       db.prepare('DELETE FROM access_logs WHERE mac_address=?').run(mac);
       db.prepare('DELETE FROM clients WHERE mac_address=?').run(mac);
@@ -330,7 +391,8 @@ async function api(req, res, url) {
   if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
   if (route === '/api/admin/clients' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
-    const rows = db.prepare(`SELECT c.mac_address,c.client_ip,c.ssid,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,
+    sweepOfflineClients();
+    const rows = db.prepare(`SELECT c.mac_address,c.client_ip,c.ssid,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,c.authorized_until,
       u.full_name,u.email,u.phone_number,u.address,u.is_verified
       FROM clients c LEFT JOIN users u ON u.id=c.user_id
       ORDER BY c.last_seen_at DESC LIMIT 250`).all();
@@ -340,6 +402,19 @@ async function api(req, res, url) {
     const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
       SUM(CASE WHEN auth_status='authorized' THEN 1 ELSE 0 END) AS authorized FROM clients`).get(today);
     return json(res, 200, { clients, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
+  }
+  if (route === '/api/admin/notifications' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    sweepOfflineClients();
+    const notifications = db.prepare(`SELECT id,type,client_mac,title,message,created_at,read_at
+      FROM notifications ORDER BY created_at DESC LIMIT 40`).all();
+    const unreadCount = db.prepare('SELECT COUNT(*) AS total FROM notifications WHERE read_at IS NULL').get()?.total || 0;
+    return json(res, 200, { notifications, unreadCount });
+  }
+  if (route === '/api/admin/notifications/read' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    db.prepare('UPDATE notifications SET read_at=? WHERE read_at IS NULL').run(new Date().toISOString());
+    return json(res, 200, { ok:true });
   }
   if (route === '/api/admin/clients' && req.method === 'DELETE') {
     if (!requireAdmin(req,res)) return;

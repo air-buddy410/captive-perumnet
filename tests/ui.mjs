@@ -11,7 +11,8 @@ assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Sta
 assert.match(html, /id="user-login-screen" class="login-page portal-modal"/, 'Login pelanggan harus memakai modal.');
 assert.match(html, /id="sidebar-toggle"/, 'Dashboard harus menyediakan tombol navigasi mobile.');
 assert.match(html, /class="nav-icon"[^>]*viewBox="0 0 24 24"/, 'Sidebar harus memakai ikon SVG yang konsisten.');
-assert.match(html, /class="header-action"[^>]*title="Notifikasi"/, 'Header admin harus memakai ikon notifikasi SVG.');
+assert.match(html, /class="header-action"[^>]*id="notification-toggle"[^>]*title="Notifikasi"/, 'Header admin harus memakai tombol notifikasi SVG.');
+assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel aktivitas pelanggan.');
 assert.doesNotMatch(html, /class="bell">♢/, 'Header admin tidak boleh kembali memakai simbol berlian.');
 assert.doesNotMatch(html, /<span>⚙<\/span>|<span>▦<\/span>/, 'Sidebar tidak boleh kembali memakai emoji sebagai ikon.');
 assert.match(html, /placeholder="Username atau email"/, 'Login admin harus menyediakan placeholder identitas.');
@@ -22,7 +23,10 @@ assert.match(app, /startDestinationRedirect\(\)/, 'Status koneksi harus memulai 
 assert.match(app, /data-label="Nomor HP"/, 'Tabel mobile harus memiliki label kartu data.');
 assert.match(app, /networkAliasPattern/, 'UI harus menolak network alias sebagai SSID.');
 assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\.wifi_name/, 'UI harus memprioritaskan parameter WLAN Ruijie.');
+assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifikasi pelanggan dari server.');
+assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
 assert.match(css, /body\.admin-view \.sidebar \.sidebar-brand[^}]*background:transparent/, 'Logo admin harus menyatu dengan sidebar.');
 assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpoint kartu mobile.');
+assert.match(css, /\.notification-panel\.open/, 'Panel notifikasi harus memiliki state terbuka yang jelas.');
 
 console.log('Responsive UI contract: PASS');

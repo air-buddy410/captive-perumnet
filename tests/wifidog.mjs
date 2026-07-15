@@ -96,6 +96,18 @@ try {
   });
   const adminCookie = adminLogin.headers.get('set-cookie');
   assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  const notificationsResponse = await fetch(`${baseUrl}/api/admin/notifications`, { headers:{ cookie:adminCookie } });
+  const notificationData = await notificationsResponse.json();
+  assert(notificationsResponse.status === 200, 'Admin harus dapat membaca notifikasi pelanggan.');
+  assert(notificationData.notifications.some(item=>item.type==='client_login' && item.client_mac===accountMac), 'Login pelanggan harus membuat notifikasi terhubung.');
+  assert(notificationData.notifications.some(item=>item.type==='client_offline' && item.client_mac===mac), 'Session berakhir harus membuat notifikasi offline.');
+  assert(notificationData.unreadCount >= 2, 'Notifikasi baru harus ditandai belum dibaca.');
+  const readNotifications = await fetch(`${baseUrl}/api/admin/notifications/read`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:'{}'
+  });
+  assert(readNotifications.status === 200, 'Admin harus dapat menandai semua notifikasi sebagai dibaca.');
+  const notificationsAfterRead = await fetch(`${baseUrl}/api/admin/notifications`, { headers:{ cookie:adminCookie } });
+  assert((await notificationsAfterRead.json()).unreadCount === 0, 'Badge notifikasi harus kosong setelah ditandai dibaca.');
   const clientsBeforeDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
   const clientList = await clientsBeforeDelete.json();
   assert(clientList.clients.some(client=>client.mac_address===mac && client.ssid==='PerumNet Guest'), 'Alias VLAN dari gateway harus diganti SSID fallback.');
