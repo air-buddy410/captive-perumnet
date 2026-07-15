@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#082f49" />
+    <title>PerumNet — Portal WiFi</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="portal-screen" class="portal-page active">
+        <div class="portal-visual" aria-hidden="true">
+          <div class="brand brand-light"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
+          <div class="visual-copy">
+            <span class="eyebrow light">WiFi yang terhubung dengan pelanggan Anda</span>
+            <h1>Lebih dari sekadar<br /><em>internet gratis.</em></h1>
+            <p>Berikan pengalaman koneksi yang mulus, kenali setiap pengunjung, dan bangun relasi yang lebih dekat.</p>
+          </div>
+          <div class="signal-card"><span class="signal-icon">⌁</span><div><b>Koneksi aman</b><small>Jaringan siap digunakan</small></div><i></i></div>
+          <div class="orb orb-one"></div><div class="orb orb-two"></div><div class="grid-lines"></div>
+        </div>
+
+        <div class="portal-form-wrap" id="portal-form-wrap">
+          <div class="mobile-brand brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
+          <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b id="wifi-name">Kopi Pagi Guest</b></div>
+          <div class="form-heading"><span class="eyebrow">Buat akun PerumNet</span><h2>Dapatkan akses tanpa batas.</h2><p>Daftar sekali, verifikasi email, lalu nikmati koneksi High Speed setiap kali berkunjung.</p></div>
+          <form id="lead-form" novalidate>
+            <label>Nama lengkap<input name="name" placeholder="Contoh: Made Wirawan" required /></label>
+            <div class="input-grid"><label>Email<input name="email" type="email" placeholder="nama@email.com" required /></label><label>Nomor WhatsApp<input name="phone" type="tel" placeholder="08xx xxxx xxxx" required /></label></div>
+            <label>Alamat<input name="address" placeholder="Kota atau alamat tempat tinggal" required /></label>
+            <label>Kata sandi<input name="password" type="password" minlength="8" placeholder="Minimal 8 karakter" required /></label>
+            <label class="consent"><input name="consent" type="checkbox" required /><span>Saya setuju dengan <a href="#">Syarat & Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari Kopi Pagi.</span></label>
+            <p id="form-error" class="form-error" role="alert"></p>
+            <button class="primary-button" type="submit">Daftar & Verifikasi Email <span>→</span></button>
+          </form>
+          <p class="account-prompt">Sudah punya akun? <button id="open-user-login" type="button">Masuk sekarang</button></p>
+          <button class="text-button access-back" id="back-to-access-choice" type="button">← Pilih jenis akses lain</button>
+          <p class="privacy-note"><span>♢</span> Data Anda terlindungi dan tidak akan dibagikan ke pihak lain.</p>
+          <a class="admin-link" href="#admin" id="admin-trigger">Masuk sebagai admin</a>
+        </div>
+        <div class="access-choice-wrap" id="access-choice">
+          <div class="mobile-brand brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
+          <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b>Kopi Pagi Guest</b></div>
+          <span class="eyebrow">Pilih akses Anda</span><h2>Internet sesuai kebutuhan Anda.</h2><p class="choice-intro">Pilih akses cepat untuk pengalaman penuh, atau langsung terhubung dengan kecepatan terbatas.</p>
+          <form class="quick-login" id="quick-login-form"><div class="quick-login-heading"><b>Sudah punya akun?</b><span>Login langsung untuk akses High Speed</span></div><div class="quick-login-fields"><label>Email / Username<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Kata sandi" required /></label><button type="submit">Login <span>→</span></button></div></form>
+          <button class="access-option high-speed-option" id="choose-high-speed" type="button"><span class="access-icon">⚡</span><span><b>Login / Daftar</b><strong>Internet cepat tanpa batas</strong><small>Buat akun atau login untuk akses High Speed.</small></span><i>→</i></button>
+          <button class="access-option limited-option" id="choose-limited" type="button"><span class="access-icon">⌁</span><span><b>Langsung Internet</b><strong>Kecepatan terbatas</strong><small>Tanpa isi data · Maks. <span id="choice-bandwidth">512 Kbps</span></small></span><i>→</i></button>
+          <p class="choice-terms">Dengan melanjutkan, Anda menyetujui <a href="#">Ketentuan penggunaan jaringan</a>.</p>
+          <a class="admin-link" href="#admin" id="access-admin-trigger">Masuk sebagai admin</a>
+        </div>
+      </section>
+
+      <section id="success-screen" class="success-page">
+        <div class="success-card">
+          <div class="success-icon">✓</div><span class="eyebrow">Berhasil terhubung</span><h2>Selamat menikmati<br />WiFi gratis!</h2>
+          <p id="success-message">Data Anda telah tersimpan dan akses internet sudah aktif. Selamat berselancar.</p>
+          <div class="connected-to"><span class="wifi-mini">⌁</span><div><small>Terhubung ke jaringan</small><b id="success-wifi">Kopi Pagi Guest</b></div><i>●</i></div>
+          <button class="primary-button" id="browse-button">Mulai Browsing <span>↗</span></button>
+          <button class="text-button" id="return-portal">Kembali ke portal</button>
+        </div>
+      </section>
+
+      <section id="limited-screen" class="success-page limited-page">
+        <div class="success-card">
+          <div class="limited-icon">⌁</div><span class="eyebrow">Akses terbatas aktif</span><h2>Anda sudah<br />terhubung.</h2>
+          <p>Kecepatan internet Anda saat ini dibatasi hingga <b id="limited-bandwidth">512 Kbps</b>. Isi data untuk mendapatkan akses internet kecepatan penuh.</p>
+          <div class="connected-to"><span class="wifi-mini">⌁</span><div><small>Terhubung ke jaringan</small><b id="limited-wifi">Kopi Pagi Guest</b></div><i>●</i></div>
+          <button class="primary-button" id="upgrade-access">Daftar untuk Speed Penuh <span>→</span></button>
+          <button class="text-button" id="continue-limited">Lanjutkan dengan akses terbatas</button>
+        </div>
+      </section>
+
+      <section id="verify-screen" class="success-page verify-page">
+        <div class="success-card">
+          <div class="verify-icon">✉</div><span class="eyebrow">Verifikasi diperlukan</span><h2>Cek email Anda.</h2>
+          <p>Kami telah mengirim tautan verifikasi ke <b id="verification-email">email Anda</b>. Klik tautan tersebut untuk mengaktifkan akses High Speed.</p>
+          <div class="connected-to"><span class="wifi-mini">✓</span><div><small>Status pendaftaran</small><b>Menunggu verifikasi email</b></div></div>
+          <button class="primary-button" id="simulate-verification">Saya sudah verifikasi <span>→</span></button>
+          <button class="text-button" id="back-from-verify">Kembali ke pilihan akses</button>
+        </div>
+      </section>
+
+      <section id="user-login-screen" class="login-page">
+        <div class="login-card"><div class="brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Akun pelanggan</span><h2>Masuk untuk internet cepat</h2><p>Gunakan akun yang telah terverifikasi untuk memperoleh akses High Speed.</p>
+          <form id="user-login-form"><label>Email<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Masukkan kata sandi" required /></label><button class="primary-button">Masuk & Sambungkan <span>→</span></button></form><button class="text-button" id="back-from-user-login">← Kembali ke pilihan akses</button>
+        </div>
+      </section>
+
+      <section id="login-screen" class="login-page">
+        <div class="login-card"><div class="brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Area terbatas</span><h2>Masuk ke dashboard</h2><p>Kelola data pengunjung dan tampilan portal Anda.</p>
+          <form id="login-form"><label>Email<input type="email" value="admin@kopipagi.id" required /></label><label>Kata sandi<input type="password" value="password" required /></label><button class="primary-button">Masuk ke Dashboard <span>→</span></button></form><button class="text-button" id="back-portal">← Kembali ke portal</button>
+        </div>
+      </section>
+
+      <section id="dashboard-screen" class="dashboard-page">
+        <aside class="sidebar"><div class="brand brand-light"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><div class="workspace"><span class="avatar">KP</span><div><b>Kopi Pagi</b><small>Portal WiFi</small></div><span>⌄</span></div><nav><a class="nav-item active" data-tab="leads"><span>▦</span> Data Pengunjung</a><a class="nav-item" data-tab="settings"><span>⚙</span> Pengaturan Portal</a></nav><div class="sidebar-bottom"><a><span>?</span> Pusat Bantuan</a><a id="logout"><span>⇥</span> Keluar</a><p>PerumNet Portal <small>v1.0.0</small></p></div></aside>
+        <div class="dash-content">
+          <header class="dash-header"><div><span id="dash-date">Selasa, 15 Juli 2026</span><h2 id="dash-title">Data Pengunjung</h2></div><div class="admin-profile"><span class="bell">♢</span><span class="avatar">AD</span><div><b>Admin Kopi Pagi</b><small>admin@kopipagi.id</small></div></div></header>
+          <div id="leads-tab" class="tab-content active"><div class="stats"><article><div class="stat-symbol teal">◉</div><div><small>Total Pengunjung</small><b id="total-leads">1,248</b><em>↑ 12,5% <span>dari bulan lalu</span></em></div></article><article><div class="stat-symbol orange">◷</div><div><small>Hari Ini</small><b id="today-leads">32</b><em>↑ 8,2% <span>dari kemarin</span></em></div></article><article><div class="stat-symbol blue">⌁</div><div><small>Rata-rata / Hari</small><b>28</b><em class="neutral">Stabil <span>dalam 7 hari</span></em></div></article></div>
+            <div class="table-card"><div class="table-heading"><div><h3>Daftar Pengunjung</h3><p>Data terbaru dari portal WiFi Anda.</p></div><button id="export-csv" class="outline-button">⇩ Ekspor CSV</button></div><div class="table-tools"><label class="search"><span>⌕</span><input id="search-input" placeholder="Cari nama atau email..." /></label><button class="filter-button">☷ Filter <span>⌄</span></button></div><div class="table-scroll"><table><thead><tr><th>Pengunjung</th><th>Nomor WhatsApp</th><th>Tipe Akses</th><th>Alamat</th><th>Waktu Akses</th><th></th></tr></thead><tbody id="lead-rows"></tbody></table></div><footer class="table-footer"><span id="result-count">Menampilkan 1–6 dari 1.248 data</span><div><button disabled>‹</button><button class="page-active">1</button><button>2</button><button>3</button><button>…</button><button>›</button></div></footer></div>
+          </div>
+          <div id="settings-tab" class="tab-content"><div class="settings-layout"><div><span class="eyebrow">Personalisasi portal</span><h2>Tampilan Portal WiFi</h2><p class="subcopy">Sesuaikan identitas dan pesan yang dilihat pengunjung saat terhubung.</p><form id="settings-form" class="settings-form"><label>Nama jaringan WiFi<input id="setting-wifi" value="Kopi Pagi Guest" /></label><label>Judul sambutan<input id="setting-title" value="Terhubung dalam hitungan detik." /></label><label>Pesan pembuka<textarea id="setting-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</textarea></label><label>Syarat & Ketentuan<textarea>Saya setuju dengan Syarat & Ketentuan serta pengolahan data untuk informasi dan penawaran.</textarea></label><button class="primary-button">Simpan Perubahan <span>→</span></button></form></div><div class="portal-preview"><small>PRATINJAU</small><div class="mini-portal"><div class="mini-brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><div class="mini-signal">⌁</div><h3 id="preview-title">Terhubung dalam hitungan detik.</h3><p id="preview-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</p><div class="mini-input"></div><div class="mini-input"></div><div class="mini-button">Dapatkan Akses WiFi →</div></div></div></div></div>
+        </div>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>
