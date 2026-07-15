@@ -52,9 +52,36 @@ const cookie = (req, name) => Object.fromEntries((req.headers.cookie || '').spli
 function adminSession(req) { const value = cookie(req, 'perumnet_admin'); if (!value) return false; const [encodedEmail, signature] = value.split('.'); const email = Buffer.from(encodedEmail || '', 'base64url').toString(); return email === config.adminEmail && signature === createHash('sha256').update(`${email}:${config.sessionSecret}`).digest('hex'); }
 function requireAdmin(req, res) { if (!adminSession(req)) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return false; } return true; }
 async function body(req) { let value = ''; for await (const part of req) value += part; try { return value ? JSON.parse(value) : {}; } catch { throw new Error('JSON tidak valid.'); } }
-function contextFrom(value = {}) { return { client_mac: value.client_mac || null, client_ip: value.client_ip || null, ssid: value.ssid || null, login_url: value.login_url || null, logout_url: value.logout_url || null, orig_url: value.orig_url || null }; }
+function contextFrom(value = {}) {
+  return {
+    client_mac: value.client_mac || value.mac || null,
+    client_ip: value.client_ip || value.ip || null,
+    ssid: value.ssid || null,
+    login_url: value.login_url || null,
+    logout_url: value.logout_url || null,
+    orig_url: value.orig_url || value.url || null,
+    // WiFiDog context is forwarded by Reyee when opening an external portal.
+    gw_address: value.gw_address || null,
+    gw_port: value.gw_port || null,
+    gw_id: value.gw_id || null,
+    token: value.token || null
+  };
+}
+function wifiDogAuthorization(context, profile) {
+  if (!context.gw_address || !context.gw_port || !context.token) return null;
+  const port = Number(context.gw_port);
+  const gateway = String(context.gw_address).trim();
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[a-zA-Z0-9.:[\]-]+$/.test(gateway)) return null;
+  const host = gateway.includes(':') && !gateway.startsWith('[') ? `[${gateway}]` : gateway;
+  const url = new URL(`http://${host}:${port}/wifidog/auth`);
+  url.searchParams.set('token', context.token);
+  return { mode: 'redirect', protocol: 'wifidog', url: url.toString(), profile };
+}
 function authorize(context, profile, username) {
-  if (config.reyeeMode !== 'redirect' || !context.login_url) return { mode: 'mock', profile, message: `Otorisasi ${profile} disimulasikan. Atur REYEE_AUTH_MODE=redirect untuk gateway.` };
+  if (config.reyeeMode !== 'redirect') return { mode: 'mock', profile, message: `Otorisasi ${profile} disimulasikan. Atur REYEE_AUTH_MODE=redirect untuk gateway.` };
+  const wifiDog = wifiDogAuthorization(context, profile);
+  if (wifiDog) return wifiDog;
+  if (!context.login_url) return { mode: 'mock', profile, message: 'Data redirect dari gateway belum diterima.' };
   const url = new URL(context.login_url);
   url.searchParams.set(config.reyeeUserParam, username);
   url.searchParams.set(config.reyeePasswordParam, profile === 'limited' ? 'limited-guest' : `portal-${username}`);

@@ -1,6 +1,8 @@
 const $ = (selector) => document.querySelector(selector);
 const screens = { portal: $('#portal-screen'), success: $('#success-screen'), limited: $('#limited-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
-const captiveContext = Object.fromEntries(['client_mac','client_ip','ssid','login_url','logout_url','orig_url'].map(key => [key, new URLSearchParams(location.search).get(key) || '']));
+// Preserve every query parameter forwarded by the gateway. WiFiDog uses
+// gw_address, gw_port, gw_id, mac, url, and token.
+const captiveContext = Object.fromEntries(new URLSearchParams(location.search).entries());
 let verificationToken = new URLSearchParams(location.search).get('verify');
 async function api(path, payload) { const response = await fetch(path, { method: payload ? 'POST' : 'GET', headers: payload ? { 'content-type': 'application/json' } : undefined, body: payload ? JSON.stringify(payload) : undefined }); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
