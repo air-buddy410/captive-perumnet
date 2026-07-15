@@ -4,6 +4,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 import { join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
+import nodemailer from 'nodemailer';
 
 try { process.loadEnvFile?.('.env'); } catch { /* .env is optional for local development */ }
 
@@ -27,7 +28,7 @@ db.exec(`
     mac_address TEXT PRIMARY KEY, client_ip TEXT, ssid TEXT, gateway_id TEXT,
     user_id TEXT, access_type TEXT CHECK(access_type IN ('high_speed','limited')),
     auth_status TEXT NOT NULL DEFAULT 'pending' CHECK(auth_status IN ('pending','authorized')),
-    first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, authorized_until TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
   CREATE TABLE IF NOT EXISTS portal_settings (
@@ -37,6 +38,7 @@ db.exec(`
   );
 `);
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN default_ssid TEXT NOT NULL DEFAULT 'PerumNet Guest'"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN authorized_until TEXT'); } catch { /* The column already exists after an upgrade. */ }
 db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,updated_at) VALUES (1,?,?,?,?,?)`)
   .run('Internet sesuai kebutuhan Anda.', 'Pilih akses cepat atau langsung terhubung dengan kecepatan terbatas.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
 
@@ -46,11 +48,19 @@ const config = {
   adminEmail: process.env.ADMIN_EMAIL || 'admin@kopipagi.id',
   adminPassword: process.env.ADMIN_PASSWORD || 'password',
   sessionSecret: process.env.SESSION_SECRET || 'development-only-change-me',
+  nodeEnv: process.env.NODE_ENV || 'development',
+  smtpHost: process.env.SMTP_HOST || '',
+  smtpPort: Number(process.env.SMTP_PORT || 465),
+  smtpSecure: String(process.env.SMTP_SECURE || 'true') === 'true',
+  smtpUser: process.env.SMTP_USER || '',
+  smtpPassword: process.env.SMTP_PASSWORD || '',
+  emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
   reyeeMode: process.env.REYEE_AUTH_MODE || 'mock', // mock | redirect
   reyeeUserParam: process.env.REYEE_USERNAME_PARAM || 'username',
   reyeePasswordParam: process.env.REYEE_PASSWORD_PARAM || 'password',
   reyeePostUrlParam: process.env.REYEE_POST_URL_PARAM || 'post_url'
 };
+const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({ host:config.smtpHost, port:config.smtpPort, secure:config.smtpSecure, auth:{ user:config.smtpUser, pass:config.smtpPassword } }) : null;
 const id = () => randomBytes(16).toString('hex');
 const json = (res, status, value, headers = {}) => res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers }).end(JSON.stringify(value));
 const text = (res, status, value, headers = {}) => res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', ...headers }).end(value);
@@ -90,7 +100,12 @@ function trackClient(context) {
       last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, context.gw_id, now, now);
 }
 function wifiDogAuthorization(context, profile) {
-  if (!context.gw_address || !context.gw_port || !context.token) return null;
+  if (!context.gw_address || !context.gw_port) return null;
+  // ReyeeOS WiFiDog uses an auth-server query instead of a browser token. Once
+  // the session is stored, revisiting the original URL makes the gateway query
+  // /auth/wifidogAuth/auth and receive Auth: 1.
+  if (!context.token && context.client_mac && context.orig_url) return { mode:'redirect', protocol:'reyee-wifidog', url:context.orig_url, profile };
+  if (!context.token) return null;
   const port = Number(context.gw_port);
   const gateway = String(context.gw_address).trim();
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[a-zA-Z0-9.:[\]-]+$/.test(gateway)) return null;
@@ -114,9 +129,23 @@ function writeLog(userId, context, accessType) {
   trackClient(context);
   const now = new Date().toISOString();
   db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,timestamp) VALUES (?,?,?,?,?,?,?)').run(id(), userId, context.client_mac, context.client_ip, accessType, context.ssid, now);
-  if (context.client_mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=? WHERE mac_address=?').run(userId, accessType, 'authorized', now, String(context.client_mac).toLowerCase());
+  const authorizedUntil = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+  if (context.client_mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=?, authorized_until=? WHERE mac_address=?').run(userId, accessType, 'authorized', now, authorizedUntil, String(context.client_mac).toLowerCase());
 }
-async function sendVerification(email, token) { const link = `${config.baseUrl}/?verify=${token}`; await appendFile(join(dataDir, 'email-outbox.ndjson'), JSON.stringify({ to: email, type: 'verify-email', link, createdAt: new Date().toISOString() }) + '\n'); return link; }
+async function sendVerification(email, token) {
+  const link = `${config.baseUrl}/?verify=${token}`;
+  if (!mailTransport) {
+    if (config.nodeEnv === 'production') throw new Error('SMTP_NOT_CONFIGURED');
+    await appendFile(join(dataDir, 'email-outbox.ndjson'), JSON.stringify({ to: email, type: 'verify-email', link, createdAt: new Date().toISOString() }) + '\n');
+    return link;
+  }
+  await mailTransport.sendMail({
+    from:`PerumNet WiFi <${config.emailFrom}>`, to:email, subject:'Verifikasi akun WiFi PerumNet',
+    text:`Verifikasi akun PerumNet Anda melalui tautan berikut: ${link}`,
+    html:`<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px"><h2 style="color:#008d85">Verifikasi akun PerumNet</h2><p>Klik tombol berikut untuk memverifikasi email dan mengaktifkan login High Speed.</p><p><a href="${link}" style="display:inline-block;padding:12px 20px;color:#fff;background:#04a99f;border-radius:8px;text-decoration:none;font-weight:700">Verifikasi Email</a></p><p style="color:#71828b;font-size:12px">Jika Anda tidak mendaftar, abaikan email ini.</p></div>`
+  });
+  return link;
+}
 
 async function api(req, res, url) {
   const route = url.pathname;
@@ -128,10 +157,23 @@ async function api(req, res, url) {
     const normalized = String(email).toLowerCase().trim(); const exists = db.prepare('SELECT id FROM users WHERE email=?').get(normalized);
     if (exists) return json(res, 409, { error: 'Email ini sudah terdaftar. Silakan login.' });
     const token = randomBytes(24).toString('hex'); const userId = id();
+    let verificationUrl;
+    try { verificationUrl = await sendVerification(normalized, token); }
+    catch (error) { console.error('Verification email failed:', error.message); return json(res, 503, { error:'Email verifikasi belum dapat dikirim. Hubungi administrator portal.' }); }
     db.prepare('INSERT INTO users (id,full_name,email,phone_number,address,password_hash,is_verified,verification_token,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
       .run(userId, fullName.trim(), normalized, phone.trim(), address.trim(), hashPassword(password), 0, hashToken(token), new Date().toISOString());
-    const verificationUrl = await sendVerification(normalized, token);
     return json(res, 201, { message: 'Cek email untuk verifikasi.', email: normalized, verificationUrl: process.env.NODE_ENV === 'production' ? undefined : verificationUrl });
+  }
+  if (route === '/api/auth/resend' && req.method === 'POST') {
+    const { email } = await body(req); const normalized = String(email || '').toLowerCase().trim();
+    const user = db.prepare('SELECT id,is_verified FROM users WHERE email=?').get(normalized);
+    if (!user) return json(res, 200, { message:'Jika email terdaftar, tautan verifikasi akan dikirim.' });
+    if (user.is_verified) return json(res, 409, { error:'Email sudah terverifikasi. Silakan login.' });
+    const token = randomBytes(24).toString('hex');
+    try { await sendVerification(normalized, token); }
+    catch (error) { console.error('Verification resend failed:', error.message); return json(res, 503, { error:'Email verifikasi belum dapat dikirim. Hubungi administrator portal.' }); }
+    db.prepare('UPDATE users SET verification_token=? WHERE id=?').run(hashToken(token), user.id);
+    return json(res, 200, { message:'Email verifikasi dikirim ulang.' });
   }
   if (route === '/api/auth/verify' && req.method === 'POST') {
     const { token, context } = await body(req); const user = db.prepare('SELECT id,email FROM users WHERE verification_token=?').get(hashToken(token || ''));
@@ -183,8 +225,10 @@ const server = createServer(async (req, res) => {
       const client = contextFrom(Object.fromEntries(url.searchParams.entries()));
       trackClient(client);
       const mac = String(client.client_mac || '').toLowerCase();
-      const session = mac && db.prepare("SELECT auth_status FROM clients WHERE mac_address=?").get(mac);
-      return text(res, 200, session?.auth_status === 'authorized' ? 'Auth: 1\n' : 'Auth: 0\n');
+      const session = mac && db.prepare("SELECT auth_status,authorized_until FROM clients WHERE mac_address=?").get(mac);
+      const valid = session?.auth_status === 'authorized' && session.authorized_until && session.authorized_until > new Date().toISOString();
+      if (session?.auth_status === 'authorized' && !valid) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL WHERE mac_address=?").run(mac);
+      return text(res, 200, valid ? 'Auth: 1\n' : 'Auth: 0\n');
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
     let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/') ? '/index.html' : url.pathname;
