@@ -133,3 +133,44 @@ body.admin-view .settings-layout{grid-template-columns:minmax(320px,600px) minma
 }
 
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
+/* Refined admin identity and icon system */
+.nav-icon,.workspace-chevron,.mini-signal{fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.nav-icon{width:18px;height:18px;flex:0 0 18px}
+.workspace-chevron{width:17px;height:17px;margin-left:auto;color:#bfccca}
+.sidebar-toggle:focus{outline:0}.sidebar-toggle:focus-visible{box-shadow:0 0 0 3px #04a99f2e}
+body.admin-view .nav-item,body.admin-view .sidebar-bottom a{gap:11px}
+body.admin-view .nav-item>span,body.admin-view .sidebar-bottom a>span{min-width:0}
+body.admin-view .nav-item .nav-icon{color:#b9cac7;transition:color .2s}
+body.admin-view .nav-item.active .nav-icon,body.admin-view .nav-item:hover .nav-icon{color:#fff}
+body.admin-view .sidebar-bottom .nav-icon{color:#a9bab7}
+
+.admin-login-card{width:min(440px,100%);padding:42px 44px 38px}
+.admin-login-brand{display:flex;justify-content:center;width:100%}
+body .admin-login-card .brand{display:flex;justify-content:center;width:172px;height:86px;margin:0 auto 16px;padding:7px 10px;border:1px solid #e8efed;border-radius:15px;box-shadow:0 10px 28px #263f3d14}
+body .admin-login-card .brand img{width:148px;max-width:100%;height:auto;object-fit:contain}
+.admin-login-card>.eyebrow{display:block;width:100%;margin:0 0 23px;text-align:center}
+.admin-login-card h2{margin:0 0 10px;font-size:29px}
+.admin-login-card>p{margin-bottom:26px}
+.admin-login-card form label{margin-bottom:16px}
+.admin-login-card form input{min-height:49px;background:#fbfdfc}
+.admin-login-card .primary-button{margin-top:5px;border-radius:9px}
+.admin-login-card .text-button{margin-top:21px}
+
+body.admin-view .mini-portal{overflow:hidden;padding:24px;background:linear-gradient(145deg,#05aaa0,#008d85);box-shadow:0 16px 36px #0a777127}
+body.admin-view .mini-brand{display:flex;justify-content:flex-start;width:138px;height:64px;padding:0;background:transparent;border-radius:0;box-shadow:none}
+body.admin-view .mini-brand img{width:132px;max-width:100%;filter:brightness(0) invert(1);opacity:.96}
+body.admin-view .mini-signal{display:block;width:38px;height:38px;margin:22px 0 14px;color:#fff}
+body.admin-view .mini-portal h3{max-width:230px;font-size:20px}
+body.admin-view .mini-portal p{margin-bottom:17px;font-size:11px}
+body.admin-view .mini-input{height:30px;border-radius:7px}
+body.admin-view .mini-button{padding:10px;border-radius:7px}
+
+@media(max-width:520px){
+  body .admin-login-card{width:100%;padding:30px 24px 27px;margin-top:18px;border-radius:18px}
+  body .admin-login-card .brand{width:154px;height:77px;margin-bottom:14px;border-radius:13px}
+  body .admin-login-card .brand img{width:133px}
+  .admin-login-card>.eyebrow{margin-bottom:19px}
+  .admin-login-card h2{font-size:27px;line-height:1.2}
+  .admin-login-card>p{margin-bottom:23px}
+}
