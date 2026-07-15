@@ -113,17 +113,43 @@ try {
   assert(loginResponse.status === 200 && accountLogin.authorization.profile === 'high_speed', 'Login akun terverifikasi harus membuat token High Speed.');
   const accountAuth = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
   assert(accountAuth.body === 'Auth: 1\n', 'Gateway harus menerima token login akun terverifikasi.');
+  const accountCounterWithoutGateway = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
+  assert(accountCounterWithoutGateway.body === 'Auth: 1\n', 'Callback token tetap harus memakai gateway sesi jika gw_id tidak dikirim ulang.');
   const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ email:'admin-test@example.com', password:'admin-test-password' })
   });
   const adminCookie = adminLogin.headers.get('set-cookie');
   assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
-  const notificationsResponse = await fetch(`${baseUrl}/api/admin/notifications`, { headers:{ cookie:adminCookie } });
+  const secondGatewayContext = { ...context, gw_id:'branch-gateway', ip:'10.2.10.10' };
+  const secondGatewayResponse = await fetch(`${baseUrl}/api/captive/limited`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:secondGatewayContext })
+  });
+  assert(secondGatewayResponse.status === 200, 'MAC yang sama harus dapat dicatat pada gateway kedua.');
+  const networkResponse = await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } });
+  const network = await networkResponse.json();
+  assert(networkResponse.status === 200 && network.gateways.some(gateway=>gateway.id==='test-gateway') && network.gateways.some(gateway=>gateway.id==='branch-gateway'), 'Gateway harus ditemukan otomatis dari gw_id Ruijie.');
+  const projectResponse = await fetch(`${baseUrl}/api/admin/projects`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ name:'Cabang Tes',location:'Denpasar' })
+  });
+  const projectData = await projectResponse.json();
+  assert(projectResponse.status === 201 && projectData.project.id, 'Admin harus dapat membuat project baru.');
+  const gatewayUpdate = await fetch(`${baseUrl}/api/admin/gateways`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'branch-gateway',projectId:projectData.project.id,name:'Gateway Cabang',location:'Renon',model:'RG-EG105G-P-V3' })
+  });
+  assert(gatewayUpdate.status === 200, 'Admin harus dapat mengatur identitas dan project gateway.');
+  const filteredClientsResponse = await fetch(`${baseUrl}/api/admin/clients?gatewayId=branch-gateway`, { headers:{ cookie:adminCookie } });
+  const filteredClients = await filteredClientsResponse.json();
+  assert(filteredClients.clients.length === 1 && filteredClients.clients[0].project_name === 'Cabang Tes' && filteredClients.clients[0].gateway_name === 'Gateway Cabang', 'Filter gateway harus mengembalikan data dan identitas gateway yang tepat.');
+  const projectClientsResponse = await fetch(`${baseUrl}/api/admin/clients?projectId=${projectData.project.id}`, { headers:{ cookie:adminCookie } });
+  assert((await projectClientsResponse.json()).stats.total === 1, 'Statistik project harus mengikuti scope yang dipilih.');
+  const notificationsResponse = await fetch(`${baseUrl}/api/admin/notifications?gatewayId=test-gateway`, { headers:{ cookie:adminCookie } });
   const notificationData = await notificationsResponse.json();
   assert(notificationsResponse.status === 200, 'Admin harus dapat membaca notifikasi pelanggan.');
   assert(notificationData.notifications.some(item=>item.type==='client_login' && item.client_mac===accountMac), 'Login pelanggan harus membuat notifikasi terhubung.');
   assert(notificationData.notifications.some(item=>item.type==='client_offline' && item.client_mac===mac), 'Session berakhir harus membuat notifikasi offline.');
+  assert(notificationData.notifications.every(item=>item.gateway_id==='test-gateway' && item.gateway_name), 'Notifikasi harus membawa scope dan identitas gateway.');
   assert(notificationData.unreadCount >= 2, 'Notifikasi baru harus ditandai belum dibaca.');
   const readNotifications = await fetch(`${baseUrl}/api/admin/notifications/read`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:'{}'
@@ -133,10 +159,11 @@ try {
   assert((await notificationsAfterRead.json()).unreadCount === 0, 'Badge notifikasi harus kosong setelah ditandai dibaca.');
   const clientsBeforeDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
   const clientList = await clientsBeforeDelete.json();
-  assert(clientList.clients.some(client=>client.mac_address===mac && client.ssid==='PerumNet Guest'), 'Alias VLAN dari gateway harus diganti SSID fallback.');
+  assert(clientList.clients.filter(client=>client.mac_address===mac).length === 2, 'Satu MAC pada dua gateway tidak boleh saling menimpa.');
+  assert(clientList.clients.some(client=>client.gateway_id==='test-gateway' && client.mac_address===mac && client.ssid==='PerumNet Guest'), 'Alias VLAN dari gateway harus diganti SSID fallback.');
   assert(clientList.clients.some(client=>client.mac_address===accountMac && client.ssid==='@PERUMNET_FreeWiFi'), 'Parameter WLAN asli Ruijie harus diprioritaskan sebagai SSID.');
   const deleteResponse = await fetch(`${baseUrl}/api/admin/clients`, {
-    method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ macAddress:accountMac })
+    method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ gatewayId:'test-gateway',macAddress:accountMac })
   });
   const deleted = await deleteResponse.json();
   assert(deleteResponse.status === 200 && deleted.deletedAccount && deleted.gatewayAuthorizationRevoked, 'Hapus admin harus menghapus akun dan mencabut otorisasi gateway.');

@@ -17,6 +17,10 @@ assert.match(html, /class="sidebar-brand brand brand-light" href="https:\/\/hots
 assert.match(html, /class="nav-icon"[^>]*viewBox="0 0 24 24"/, 'Sidebar harus memakai ikon SVG yang konsisten.');
 assert.match(html, /class="header-action"[^>]*id="notification-toggle"[^>]*title="Notifikasi"/, 'Header admin harus memakai tombol notifikasi SVG.');
 assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel aktivitas pelanggan.');
+assert.match(html, /data-tab="network"/, 'Dashboard harus menyediakan pengelolaan project dan gateway.');
+assert.match(html, /id="scope-project"/, 'Dashboard harus menyediakan filter project global.');
+assert.match(html, /id="scope-gateway"/, 'Dashboard harus menyediakan filter gateway global.');
+assert.match(html, /id="gateway-list"/, 'Dashboard harus menampilkan daftar identitas gateway.');
 assert.match(html, /id="forgot-password-screen" class="login-page portal-modal"/, 'Portal harus menyediakan pemulihan kata sandi melalui email.');
 assert.match(html, /id="reset-password-screen" class="login-page account-action-page"/, 'Tautan reset harus membuka halaman khusus di luar hotspot.');
 assert.match(html, /id="account-status-screen" class="success-page account-action-page"/, 'Verifikasi email harus membuka halaman status khusus.');
@@ -36,11 +40,15 @@ assert.match(app, /networkAliasPattern/, 'UI harus menolak network alias sebagai
 assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\.wifi_name/, 'UI harus memprioritaskan parameter WLAN Ruijie.');
 assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifikasi pelanggan dari server.');
 assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
+assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus client harus dibatasi pada gateway yang tepat.');
+assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
 assert.match(app, /\/api\/auth\/forgot-password/, 'UI harus dapat meminta email reset kata sandi.');
 assert.match(app, /\/api\/auth\/reset-password/, 'UI harus dapat menyimpan kata sandi baru.');
 assert.match(app, /showAccountStatus\('Email berhasil diverifikasi\.','Kembali ke jendela login WiFi/, 'Verifikasi email tidak boleh mengarahkan user ke form hotspot.');
 assert.match(css, /body\.admin-view \.sidebar \.sidebar-brand[^}]*background:transparent/, 'Logo admin harus menyatu dengan sidebar.');
 assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpoint kartu mobile.');
 assert.match(css, /\.notification-panel\.open/, 'Panel notifikasi harus memiliki state terbuka yang jelas.');
+assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif khusus.');
+assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
 
 console.log('Responsive UI contract: PASS');

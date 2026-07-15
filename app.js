@@ -38,6 +38,23 @@ async function loadPortalSettings() {
   } catch { setWifiName(gatewaySsid || 'PerumNet Guest'); }
 }
 const leads = [];
+let networkCatalog = { projects:[], gateways:[] };
+const adminScope = { projectId:'', gatewayId:'' };
+function scopeQuery() {
+  const params = new URLSearchParams();
+  if (adminScope.gatewayId) params.set('gatewayId',adminScope.gatewayId);
+  else if (adminScope.projectId) params.set('projectId',adminScope.projectId);
+  const value=params.toString(); return value ? `?${value}` : '';
+}
+function selectedProject() { return networkCatalog.projects.find(project=>project.id===adminScope.projectId); }
+function selectedGateway() { return networkCatalog.gateways.find(gateway=>gateway.id===adminScope.gatewayId); }
+function updateScopeIdentity() {
+  const project=selectedProject(), gateway=selectedGateway();
+  $('#scope-title').textContent=gateway?.name || project?.name || 'Semua jaringan';
+  $('#scope-subtitle').textContent=gateway ? `${project?.name || gateway.project_name} · ${gateway.location || 'Lokasi belum diisi'}` : project ? `Ringkasan seluruh gateway di ${project.name}` : 'Ringkasan gabungan seluruh project dan gateway';
+  $('#workspace-name').textContent=gateway?.name || project?.name || 'Semua Project';
+  $('#workspace-context').textContent=gateway ? (gateway.project_name || project?.name || 'Gateway aktif') : project ? 'Seluruh gateway project' : 'Seluruh gateway';
+}
 function show(screen) { Object.values(screens).forEach(el => el.classList.remove('active')); screens[screen].classList.add('active'); document.body.classList.toggle('modal-open', screens[screen].classList.contains('portal-modal')); if (!screens[screen].classList.contains('portal-modal')) window.scrollTo(0,0); }
 function showAccessChoice() { $('#portal-screen').classList.remove('show-form'); show('portal'); }
 function showLeadForm() { $('#portal-screen').classList.add('show-form'); show('portal'); }
@@ -71,12 +88,12 @@ function renderNotifications(notifications=[], unreadCount=0) {
     const icon = isLogin
       ? '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></svg>'
       : '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M17 8h5"/></svg>';
-    return `<article class="notification-item ${item.read_at ? '' : 'unread'}"><span class="notification-icon ${isLogin ? 'online' : 'offline'}">${icon}</span><div><b>${escapeHtml(item.title)}</b><p>${escapeHtml(item.message)}</p><time datetime="${escapeHtml(item.created_at)}">${escapeHtml(relativeTime(item.created_at))}</time></div></article>`;
+    return `<article class="notification-item ${item.read_at ? '' : 'unread'}"><span class="notification-icon ${isLogin ? 'online' : 'offline'}">${icon}</span><div><b>${escapeHtml(item.title)}</b><p>${escapeHtml(item.message)}</p><span class="notification-scope">${escapeHtml(item.project_name)} · ${escapeHtml(item.gateway_name)}</span><time datetime="${escapeHtml(item.created_at)}">${escapeHtml(relativeTime(item.created_at))}</time></div></article>`;
   }).join('') : '<p class="notification-empty">Belum ada aktivitas terbaru.</p>';
 }
 async function loadNotifications() {
   if (!isAdminView) return;
-  const result = await api('/api/admin/notifications');
+  const result = await api(`/api/admin/notifications${scopeQuery()}`);
   renderNotifications(result.notifications, result.unreadCount);
 }
 function setNotificationPanel(open) {
@@ -88,14 +105,15 @@ function startNotificationPolling() {
   notificationTimer = setInterval(() => loadNotifications().catch(() => {}), 15000);
 }
 async function loadAdminLeads() {
-  const { clients, stats } = await api('/api/admin/clients');
+  const { clients, stats } = await api(`/api/admin/clients${scopeQuery()}`);
   leads.splice(0, leads.length, ...clients.map(row => ({
     name:row.full_name || 'Perangkat belum login', email:row.email || row.mac_address,
     ip:row.client_ip || '—', ssid:row.ssid || '—', mac:row.mac_address,
     time:formatTime(row.last_seen_at), initials:row.full_name ? row.full_name.split(' ').slice(0,2).map(part => part[0]).join('') : 'Wi',
     phone:row.phone_number || '—', address:row.address || '—', registered:!!row.email,
     type:row.auth_status === 'pending' && row.authorized_until ? 'offline' : row.access_type === 'high_speed' ? 'high' : row.access_type === 'limited' ? 'limited' : 'pending', verified:!!row.is_verified,
-    status:row.auth_status
+    status:row.auth_status, gatewayId:row.gateway_id, gateway:row.gateway_name || row.gateway_id,
+    gatewayLocation:row.gateway_location || '—', projectId:row.project_id, project:row.project_name || '—'
   })));
   $('#total-leads').textContent = stats.total;
   $('#today-leads').textContent = stats.today;
@@ -104,12 +122,36 @@ async function loadAdminLeads() {
 }
 function renderLeads(data=leads) {
   const access = { high:'High Speed', limited:'Limited', pending:'Menunggu login', offline:'Offline' };
-  $('#lead-rows').innerHTML = data.map(l => `<tr><td data-label="Pengunjung"><div class="user-cell"><span class="avatar">${escapeHtml(l.initials)}</span><div><b>${escapeHtml(l.name)}</b><span>${escapeHtml(l.email)}</span>${l.type === 'high' && l.verified ? '<em class="verified-status">✓ Email terverifikasi</em>' : ''}</div></div></td><td data-label="Nomor HP">${escapeHtml(l.phone)}</td><td data-label="Alamat" class="address-cell">${escapeHtml(l.address)}</td><td data-label="IP Klien">${escapeHtml(l.ip)}</td><td data-label="Status"><span class="access-badge ${l.type}">${access[l.type]}</span></td><td data-label="SSID">${escapeHtml(l.ssid)}</td><td data-label="Terakhir terlihat">${escapeHtml(l.time)}</td><td data-label="MAC" class="device-cell">${escapeHtml(l.mac)}</td><td data-label="Aksi" class="action-cell"><button class="delete-client" type="button" data-mac="${escapeHtml(l.mac)}" aria-label="Hapus ${escapeHtml(l.name)}">Hapus data</button></td></tr>`).join('') || '<tr class="empty-row"><td colspan="9" class="empty-state">Belum ada perangkat yang dilaporkan gateway.</td></tr>';
+  $('#lead-rows').innerHTML = data.map(l => `<tr><td data-label="Pengunjung"><div class="user-cell"><span class="avatar">${escapeHtml(l.initials)}</span><div><b>${escapeHtml(l.name)}</b><span>${escapeHtml(l.email)}</span>${l.type === 'high' && l.verified ? '<em class="verified-status">✓ Email terverifikasi</em>' : ''}</div></div></td><td data-label="Project"><span class="network-cell"><b>${escapeHtml(l.project)}</b></span></td><td data-label="Gateway"><span class="network-cell"><b>${escapeHtml(l.gateway)}</b><small>${escapeHtml(l.gatewayId)}</small></span></td><td data-label="Nomor HP">${escapeHtml(l.phone)}</td><td data-label="Alamat" class="address-cell">${escapeHtml(l.address)}</td><td data-label="IP Klien">${escapeHtml(l.ip)}</td><td data-label="Status"><span class="access-badge ${l.type}">${access[l.type]}</span></td><td data-label="SSID">${escapeHtml(l.ssid)}</td><td data-label="Terakhir terlihat">${escapeHtml(l.time)}</td><td data-label="MAC" class="device-cell">${escapeHtml(l.mac)}</td><td data-label="Aksi" class="action-cell"><button class="delete-client" type="button" data-gateway="${escapeHtml(l.gatewayId)}" data-mac="${escapeHtml(l.mac)}" aria-label="Hapus ${escapeHtml(l.name)}">Hapus data</button></td></tr>`).join('') || '<tr class="empty-row"><td colspan="11" class="empty-state">Belum ada perangkat yang dilaporkan gateway pada filter ini.</td></tr>';
   $('#result-count').textContent = data.length === leads.length ? `Menampilkan ${data.length} perangkat` : `Menampilkan ${data.length} hasil pencarian`;
+}
+function projectOptions(selected='') { return networkCatalog.projects.map(project=>`<option value="${escapeHtml(project.id)}" ${project.id===selected?'selected':''}>${escapeHtml(project.name)}</option>`).join(''); }
+function visibleGateways() { return networkCatalog.gateways.filter(gateway=>gateway.id!=='unassigned' || Number(gateway.client_count)>0); }
+function renderGatewayCards() {
+  const gateways=visibleGateways();
+  $('#gateway-list').innerHTML=gateways.length ? gateways.map(gateway=>`<article class="gateway-card ${gateway.status}"><header><div><span class="gateway-status"><i></i>${gateway.status==='online'?'Online':'Offline'}</span><h3>${escapeHtml(gateway.name)}</h3><code>${escapeHtml(gateway.id)}</code></div><span class="gateway-client-count"><b>${gateway.client_count || 0}</b><small>perangkat</small></span></header><form class="gateway-form" data-gateway-id="${escapeHtml(gateway.id)}"><label>Project<select name="projectId">${projectOptions(gateway.project_id)}</select></label><label>Nama gateway<input name="name" value="${escapeHtml(gateway.name)}" placeholder="Nama gateway" required /></label><div class="gateway-form-grid"><label>Lokasi<input name="location" value="${escapeHtml(gateway.location || '')}" placeholder="Lokasi pemasangan" /></label><label>Model<input name="model" value="${escapeHtml(gateway.model || '')}" placeholder="Contoh: RG-EG105G-P-V3" /></label></div><div class="gateway-card-footer"><span>Terakhir aktif: <b>${escapeHtml(relativeTime(gateway.last_seen_at))}</b></span><button type="submit">Simpan identitas</button></div><p class="gateway-feedback inline-feedback" role="status"></p></form></article>`).join('') : '<div class="gateway-empty">Gateway akan muncul otomatis setelah menerima koneksi Ruijie.</div>';
+}
+function renderScopeOptions() {
+  const projectSelect=$('#scope-project'), gatewaySelect=$('#scope-gateway');
+  projectSelect.innerHTML='<option value="">Semua project</option>'+networkCatalog.projects.map(project=>`<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)} (${project.gateway_count || 0})</option>`).join('');
+  projectSelect.value=adminScope.projectId;
+  const availableGateways=adminScope.projectId ? visibleGateways().filter(gateway=>gateway.project_id===adminScope.projectId) : visibleGateways();
+  gatewaySelect.innerHTML='<option value="">Semua gateway</option>'+availableGateways.map(gateway=>`<option value="${escapeHtml(gateway.id)}">${escapeHtml(gateway.name)} · ${gateway.status==='online'?'Online':'Offline'}</option>`).join('');
+  if (!availableGateways.some(gateway=>gateway.id===adminScope.gatewayId)) adminScope.gatewayId='';
+  gatewaySelect.value=adminScope.gatewayId;
+  updateScopeIdentity();
+}
+async function loadAdminNetwork() {
+  networkCatalog=await api('/api/admin/network');
+  renderScopeOptions(); renderGatewayCards();
+  $('#network-project-total').textContent=networkCatalog.projects.length;
+  $('#network-gateway-total').textContent=visibleGateways().length;
+  $('#network-online-total').textContent=networkCatalog.gateways.filter(gateway=>gateway.status==='online').length;
+  $('#gateway-sync-time').textContent=`Disinkronkan ${new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}`;
 }
 renderLeads();
 loadPortalSettings();
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await Promise.all([loadAdminLeads(),loadNotifications()]); show('dashboard'); startNotificationPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadNotifications()]); show('dashboard'); startNotificationPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
@@ -132,11 +174,15 @@ function setSidebar(open) { document.body.classList.toggle('sidebar-open',open);
 $('#sidebar-toggle').onclick = () => setSidebar(!document.body.classList.contains('sidebar-open')); $('#sidebar-backdrop').onclick = () => setSidebar(false);
 $('#notification-toggle').onclick = event => { event.stopPropagation(); setNotificationPanel(!$('#notification-panel').classList.contains('open')); };
 $('#notification-panel').onclick = event => event.stopPropagation();
-$('#notification-read-all').onclick = async () => { try { await api('/api/admin/notifications/read', {}); await loadNotifications(); } catch (error) { alert(error.message); } };
+$('#notification-read-all').onclick = async () => { try { await api(`/api/admin/notifications/read${scopeQuery()}`, {}); await loadNotifications(); } catch (error) { alert(error.message); } };
 document.addEventListener('click', () => setNotificationPanel(false));
-document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent=tab==='leads'?'Data Pengunjung':'Pengaturan Portal'; setNotificationPanel(false); setSidebar(false); });
+document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); setNotificationPanel(false); setSidebar(false); });
 document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
-$('#search-input').addEventListener('input', e => { const q=e.target.value.toLowerCase(); renderLeads(leads.filter(l => `${l.name} ${l.email} ${l.phone} ${l.address} ${l.mac} ${l.ip} ${l.ssid}`.toLowerCase().includes(q))); });
-$('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, dan riwayat akses akan dihapus.' : 'Perangkat dan seluruh riwayat akses one-click akan dihapus.'; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminLeads(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
-$('#export-csv').onclick = () => { const csvCell = value => `"${String(value ?? '').replaceAll('"','""')}"`; const csv=['Nama,Email / Identitas,Nomor HP,Alamat,MAC,IP Klien,SSID,Tipe Akses,Status,Waktu Terakhir',...leads.map(l=>[l.name,l.email,l.phone,l.address,l.mac,l.ip,l.ssid,l.type === 'high' ? 'High Speed' : l.type === 'limited' ? 'Limited' : l.type === 'offline' ? 'Offline' : 'Menunggu login',l.status,l.time].map(csvCell).join(','))].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download='data-perangkat-perumnet.csv'; a.click(); URL.revokeObjectURL(a.href); };
+$('#scope-project').addEventListener('change',async event=>{ adminScope.projectId=event.target.value; adminScope.gatewayId=''; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
+$('#scope-gateway').addEventListener('change',async event=>{ adminScope.gatewayId=event.target.value; const gateway=selectedGateway(); if(gateway) adminScope.projectId=gateway.project_id; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
+$('#project-form').addEventListener('submit',async event=>{ event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button'),feedback=$('#project-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent=''; try { await api('/api/admin/projects',{ name:data.get('name'),location:data.get('location') }); form.reset(); feedback.textContent='Project berhasil ditambahkan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
+$('#gateway-list').addEventListener('submit',async event=>{ const form=event.target.closest('.gateway-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.gateway-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent='Menyimpan…'; try { await api('/api/admin/gateways',{ gatewayId:form.dataset.gatewayId,projectId:data.get('projectId'),name:data.get('name'),location:data.get('location'),model:data.get('model') }); feedback.textContent='Identitas gateway tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); await loadAdminLeads(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
+$('#search-input').addEventListener('input', e => { const q=e.target.value.toLowerCase(); renderLeads(leads.filter(l => `${l.name} ${l.email} ${l.phone} ${l.address} ${l.mac} ${l.ip} ${l.ssid} ${l.project} ${l.gateway} ${l.gatewayId}`.toLowerCase().includes(q))); });
+$('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, dan riwayat akses akan dihapus.' : `Perangkat dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
+$('#export-csv').onclick = () => { const csvCell = value => `"${String(value ?? '').replaceAll('"','""')}"`; const csv=['Nama,Email / Identitas,Project,Gateway,Gateway ID,Nomor HP,Alamat,MAC,IP Klien,SSID,Tipe Akses,Status,Waktu Terakhir',...leads.map(l=>[l.name,l.email,l.project,l.gateway,l.gatewayId,l.phone,l.address,l.mac,l.ip,l.ssid,l.type === 'high' ? 'High Speed' : l.type === 'limited' ? 'Limited' : l.type === 'offline' ? 'Offline' : 'Menunggu login',l.status,l.time].map(csvCell).join(','))].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`data-perangkat-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); URL.revokeObjectURL(a.href); };
 $('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const wifi=$('#setting-wifi').value.trim() || 'PerumNet Guest', title=$('#setting-title').value || 'Terhubung dalam hitungan detik.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { defaultSsid:wifi, welcomeTitle:title, welcomeText:copy, termsText:terms, limitedBandwidthKbps:bandwidth }); portalSettings = { ...portalSettings, default_ssid:wifi, welcome_title:title, welcome_text:copy, terms_text:terms, limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || wifi); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#choice-bandwidth').textContent=`${bandwidth} Kbps`; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });

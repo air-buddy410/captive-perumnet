@@ -25,17 +25,30 @@ db.exec(`
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   );
   CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, location TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS gateways (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
+    location TEXT, model TEXT, created_at TEXT NOT NULL, last_seen_at TEXT,
+    FOREIGN KEY(project_id) REFERENCES projects(id)
+  );
   CREATE TABLE IF NOT EXISTS access_logs (
     id TEXT PRIMARY KEY, user_id TEXT, mac_address TEXT, client_ip TEXT,
     access_type TEXT NOT NULL CHECK(access_type IN ('high_speed','limited')),
-    ssid TEXT, timestamp TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
+    ssid TEXT, gateway_id TEXT NOT NULL DEFAULT 'unassigned', timestamp TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
   );
   CREATE TABLE IF NOT EXISTS clients (
-    mac_address TEXT PRIMARY KEY, client_ip TEXT, ssid TEXT, gateway_id TEXT,
+    gateway_id TEXT NOT NULL DEFAULT 'unassigned', mac_address TEXT NOT NULL,
+    client_ip TEXT, ssid TEXT,
     user_id TEXT, access_type TEXT CHECK(access_type IN ('high_speed','limited')),
     auth_status TEXT NOT NULL DEFAULT 'pending' CHECK(auth_status IN ('pending','authorized')),
     first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, authorized_until TEXT,
-    FOREIGN KEY(user_id) REFERENCES users(id)
+    PRIMARY KEY(gateway_id,mac_address),
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(gateway_id) REFERENCES gateways(id)
   );
   CREATE TABLE IF NOT EXISTS captive_sessions (
     token_hash TEXT PRIMARY KEY, mac_address TEXT NOT NULL, client_ip TEXT,
@@ -49,10 +62,16 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS revoked_clients (
     mac_hash TEXT PRIMARY KEY, revoked_at TEXT NOT NULL, expires_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS revoked_gateway_clients (
+    gateway_id TEXT NOT NULL, mac_hash TEXT NOT NULL,
+    revoked_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+    PRIMARY KEY(gateway_id,mac_hash)
+  );
   CREATE TABLE IF NOT EXISTS notifications (
     id TEXT PRIMARY KEY, event_key TEXT NOT NULL UNIQUE,
     type TEXT NOT NULL CHECK(type IN ('client_login','client_offline')),
-    client_mac TEXT, user_id TEXT, title TEXT NOT NULL, message TEXT NOT NULL,
+    client_mac TEXT, gateway_id TEXT NOT NULL DEFAULT 'unassigned', user_id TEXT,
+    title TEXT NOT NULL, message TEXT NOT NULL,
     created_at TEXT NOT NULL, read_at TEXT,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
   );
@@ -65,6 +84,68 @@ db.exec(`
 `);
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN default_ssid TEXT NOT NULL DEFAULT 'PerumNet Guest'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec('ALTER TABLE clients ADD COLUMN authorized_until TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec("ALTER TABLE access_logs ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec("ALTER TABLE notifications ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
+
+// Versions before multi-gateway support used MAC as the only primary key.
+// Rebuild the table once so the same device can be tracked independently on
+// multiple Reyee gateways without losing any existing production data.
+const clientPrimaryKey = db.prepare('PRAGMA table_info(clients)').all().filter(column => column.pk > 0);
+if (clientPrimaryKey.length !== 2 || !clientPrimaryKey.some(column => column.name === 'gateway_id') || !clientPrimaryKey.some(column => column.name === 'mac_address')) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      BEGIN IMMEDIATE;
+      ALTER TABLE clients RENAME TO clients_single_gateway;
+      CREATE TABLE clients (
+        gateway_id TEXT NOT NULL DEFAULT 'unassigned', mac_address TEXT NOT NULL,
+        client_ip TEXT, ssid TEXT, user_id TEXT,
+        access_type TEXT CHECK(access_type IN ('high_speed','limited')),
+        auth_status TEXT NOT NULL DEFAULT 'pending' CHECK(auth_status IN ('pending','authorized')),
+        first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, authorized_until TEXT,
+        PRIMARY KEY(gateway_id,mac_address),
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(gateway_id) REFERENCES gateways(id)
+      );
+      INSERT INTO clients (gateway_id,mac_address,client_ip,ssid,user_id,access_type,auth_status,first_seen_at,last_seen_at,authorized_until)
+      SELECT COALESCE(NULLIF(TRIM(gateway_id),''),'unassigned'),LOWER(mac_address),client_ip,ssid,user_id,access_type,auth_status,first_seen_at,last_seen_at,authorized_until
+      FROM clients_single_gateway;
+      DROP TABLE clients_single_gateway;
+      COMMIT;
+    `);
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch { /* Transaction may already be closed. */ }
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+const migratedAt = new Date().toISOString();
+db.prepare('INSERT OR IGNORE INTO projects (id,name,location,created_at) VALUES (?,?,?,?)')
+  .run('default-project', 'PerumNet', null, migratedAt);
+db.prepare('INSERT OR IGNORE INTO gateways (id,project_id,name,location,model,created_at,last_seen_at) VALUES (?,?,?,?,?,?,?)')
+  .run('unassigned', 'default-project', 'Gateway belum teridentifikasi', null, null, migratedAt, null);
+db.exec(`
+  INSERT OR IGNORE INTO gateways (id,project_id,name,created_at,last_seen_at)
+  SELECT gateway_id,'default-project','Gateway ' || gateway_id,MIN(first_seen_at),MAX(last_seen_at)
+  FROM clients WHERE gateway_id<>'unassigned' GROUP BY gateway_id;
+  UPDATE gateways SET last_seen_at=(
+    SELECT MAX(c.last_seen_at) FROM clients c WHERE c.gateway_id=gateways.id
+  ) WHERE EXISTS (SELECT 1 FROM clients c WHERE c.gateway_id=gateways.id);
+  UPDATE access_logs SET gateway_id=COALESCE((
+    SELECT c.gateway_id FROM clients c WHERE c.mac_address=LOWER(access_logs.mac_address)
+    ORDER BY c.last_seen_at DESC LIMIT 1
+  ),'unassigned') WHERE gateway_id='unassigned' AND mac_address IS NOT NULL;
+  UPDATE notifications SET gateway_id=COALESCE((
+    SELECT c.gateway_id FROM clients c WHERE c.mac_address=LOWER(notifications.client_mac)
+    ORDER BY c.last_seen_at DESC LIMIT 1
+  ),'unassigned') WHERE gateway_id='unassigned' AND client_mac IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_clients_gateway_seen ON clients(gateway_id,last_seen_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_access_logs_gateway ON access_logs(gateway_id,timestamp DESC);
+  CREATE INDEX IF NOT EXISTS idx_notifications_gateway ON notifications(gateway_id,created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_gateways_project ON gateways(project_id,last_seen_at DESC);
+`);
 db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,updated_at) VALUES (1,?,?,?,?,?)`)
   .run('Internet sesuai kebutuhan Anda.', 'Pilih akses cepat atau langsung terhubung dengan kecepatan terbatas.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
 
@@ -131,20 +212,40 @@ function contextFrom(value = {}) {
     gw_address: value.gw_address || null,
     gw_port: value.gw_port || null,
     gw_id: value.gw_id || null,
+    gateway_name: value.gateway_name || value.gw_name || value.device_name || null,
+    gateway_model: value.gateway_model || value.gw_model || value.device_model || null,
     token: value.token || null
   };
 }
+function gatewayKey(value) {
+  const candidate = typeof value === 'object' && value ? value.gw_id : value;
+  return String(candidate || '').trim().slice(0, 191) || 'unassigned';
+}
+function ensureGateway(context = {}) {
+  const gatewayId = gatewayKey(context);
+  const now = new Date().toISOString();
+  const suppliedName = String(context.gateway_name || '').trim().slice(0, 120);
+  const suppliedModel = String(context.gateway_model || '').trim().slice(0, 120) || null;
+  const defaultName = gatewayId === 'unassigned' ? 'Gateway belum teridentifikasi' : `Gateway ${gatewayId}`;
+  db.prepare(`INSERT INTO gateways (id,project_id,name,location,model,created_at,last_seen_at)
+    VALUES (?,'default-project',?,?,?,?,?)
+    ON CONFLICT(id) DO UPDATE SET
+      last_seen_at=excluded.last_seen_at,
+      model=COALESCE(gateways.model,excluded.model)`).run(gatewayId, suppliedName || defaultName, null, suppliedModel, now, now);
+  return gatewayId;
+}
 function trackClient(context) {
   const mac = String(context.client_mac || '').trim().toLowerCase();
-  if (!mac) return;
+  const gatewayId = ensureGateway(context);
+  if (!mac) return { gatewayId, mac:null };
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO clients (mac_address,client_ip,ssid,gateway_id,first_seen_at,last_seen_at)
     VALUES (?,?,?,?,?,?)
-    ON CONFLICT(mac_address) DO UPDATE SET
+    ON CONFLICT(gateway_id,mac_address) DO UPDATE SET
       client_ip=COALESCE(excluded.client_ip,clients.client_ip),
       ssid=COALESCE(excluded.ssid,clients.ssid),
-      gateway_id=COALESCE(excluded.gateway_id,clients.gateway_id),
-      last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, context.gw_id, now, now);
+      last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, gatewayId, now, now);
+  return { gatewayId, mac };
 }
 function clientIdentity(userId, macAddress) {
   const user = userId ? db.prepare('SELECT full_name,email FROM users WHERE id=?').get(userId) : null;
@@ -154,7 +255,7 @@ function clientIdentity(userId, macAddress) {
     detail:user?.email || mac || 'Pelanggan WiFi'
   };
 }
-function createClientNotification(type, { macAddress, userId = null, accessType = null, eventKey, reason = '' }) {
+function createClientNotification(type, { gatewayId = 'unassigned', macAddress, userId = null, accessType = null, eventKey, reason = '' }) {
   if (!eventKey) return;
   const identity = clientIdentity(userId, macAddress);
   const accessLabel = accessType === 'high_speed' ? 'High Speed' : accessType === 'limited' ? 'Limited' : 'WiFi';
@@ -163,18 +264,19 @@ function createClientNotification(type, { macAddress, userId = null, accessType 
     ? `${identity.name} login dan terhubung dengan akses ${accessLabel}.`
     : `${identity.name} sudah offline${reason === 'session-expired' ? ' karena masa akses berakhir' : ''}.`;
   db.prepare(`INSERT OR IGNORE INTO notifications
-    (id,event_key,type,client_mac,user_id,title,message,created_at)
-    VALUES (?,?,?,?,?,?,?,?)`).run(id(), eventKey, type, macAddress || null, userId, title, message, new Date().toISOString());
+    (id,event_key,type,client_mac,gateway_id,user_id,title,message,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`).run(id(), eventKey, type, macAddress || null, gatewayKey(gatewayId), userId, title, message, new Date().toISOString());
 }
-function markClientOffline(macAddress, reason = 'heartbeat-missing') {
+function markClientOffline(gatewayId, macAddress, reason = 'heartbeat-missing') {
+  const scopedGatewayId = gatewayKey(gatewayId);
   const mac = String(macAddress || '').trim().toLowerCase();
   if (!mac) return false;
-  const client = db.prepare('SELECT user_id,access_type,auth_status,authorized_until FROM clients WHERE mac_address=?').get(mac);
+  const client = db.prepare('SELECT user_id,access_type,auth_status,authorized_until FROM clients WHERE gateway_id=? AND mac_address=?').get(scopedGatewayId, mac);
   if (!client || client.auth_status !== 'authorized') return false;
-  db.prepare("UPDATE clients SET auth_status='pending' WHERE mac_address=?").run(mac);
+  db.prepare("UPDATE clients SET auth_status='pending' WHERE gateway_id=? AND mac_address=?").run(scopedGatewayId, mac);
   createClientNotification('client_offline', {
-    macAddress:mac, userId:client.user_id, accessType:client.access_type,
-    eventKey:`offline:${mac}:${client.authorized_until || new Date().toISOString()}`, reason
+    gatewayId:scopedGatewayId, macAddress:mac, userId:client.user_id, accessType:client.access_type,
+    eventKey:`offline:${scopedGatewayId}:${mac}:${client.authorized_until || new Date().toISOString()}`, reason
   });
   return true;
 }
@@ -182,24 +284,31 @@ function sweepOfflineClients(now = new Date()) {
   const nowIso = now.toISOString();
   const configured = Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20;
   const heartbeatDeadline = new Date(now.getTime() - configured * 60 * 1000).toISOString();
-  const staleClients = db.prepare(`SELECT mac_address,authorized_until,last_seen_at FROM clients
+  const staleClients = db.prepare(`SELECT gateway_id,mac_address,authorized_until,last_seen_at FROM clients
     WHERE auth_status='authorized' AND (authorized_until<=? OR last_seen_at<?)`).all(nowIso, heartbeatDeadline);
   for (const client of staleClients) {
-    markClientOffline(client.mac_address, client.authorized_until <= nowIso ? 'session-expired' : 'heartbeat-missing');
+    markClientOffline(client.gateway_id, client.mac_address, client.authorized_until <= nowIso ? 'session-expired' : 'heartbeat-missing');
   }
   return staleClients.length;
 }
-function clearClientRevocation(macAddress) {
+function clearClientRevocation(gatewayId, macAddress) {
+  const scopedGatewayId = gatewayKey(gatewayId);
   const mac = String(macAddress || '').trim().toLowerCase();
-  if (mac) db.prepare('DELETE FROM revoked_clients WHERE mac_hash=?').run(hashToken(mac));
+  if (!mac) return;
+  const macHash = hashToken(mac);
+  db.prepare('DELETE FROM revoked_gateway_clients WHERE gateway_id=? AND mac_hash=?').run(scopedGatewayId, macHash);
+  db.prepare('DELETE FROM revoked_clients WHERE mac_hash=?').run(macHash);
 }
-function isClientRevoked(macAddress, nowIso = new Date().toISOString()) {
+function isClientRevoked(gatewayId, macAddress, nowIso = new Date().toISOString()) {
+  const scopedGatewayId = gatewayKey(gatewayId);
   const mac = String(macAddress || '').trim().toLowerCase();
   if (!mac) return false;
   const macHash = hashToken(mac);
-  const revoked = db.prepare('SELECT expires_at FROM revoked_clients WHERE mac_hash=?').get(macHash);
+  const revoked = db.prepare(`SELECT expires_at,'scoped' AS source FROM revoked_gateway_clients WHERE gateway_id=? AND mac_hash=?
+    UNION ALL SELECT expires_at,'legacy' AS source FROM revoked_clients WHERE mac_hash=? LIMIT 1`).get(scopedGatewayId, macHash, macHash);
   if (revoked && revoked.expires_at <= nowIso) {
-    db.prepare('DELETE FROM revoked_clients WHERE mac_hash=?').run(macHash);
+    if (revoked.source === 'scoped') db.prepare('DELETE FROM revoked_gateway_clients WHERE gateway_id=? AND mac_hash=?').run(scopedGatewayId, macHash);
+    else db.prepare('DELETE FROM revoked_clients WHERE mac_hash=?').run(macHash);
     return false;
   }
   return !!revoked;
@@ -211,6 +320,7 @@ function wifiDogAuthorization(context, profile, userId) {
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[a-zA-Z0-9.:[\]-]+$/.test(gateway)) return null;
   const mac = String(context.client_mac || '').trim().toLowerCase();
   if (!mac) return null;
+  const gatewayId = ensureGateway(context);
   const token = randomBytes(32).toString('hex');
   const now = new Date();
   const nowIso = now.toISOString();
@@ -221,10 +331,10 @@ function wifiDogAuthorization(context, profile, userId) {
     (authorized_at IS NULL AND login_expires_at < ?) OR
     (authorized_at IS NOT NULL AND authorized_until < ?) OR
     (revoked_at IS NOT NULL AND revoked_at < ?)`).run(nowIso, nowIso, revokedRetention);
-  db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE mac_address=? AND revoked_at IS NULL').run(nowIso, mac);
+  db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE gateway_id=? AND mac_address=? AND revoked_at IS NULL').run(nowIso, gatewayId, mac);
   db.prepare(`INSERT INTO captive_sessions
     (token_hash,mac_address,client_ip,gateway_id,user_id,access_type,created_at,login_expires_at)
-    VALUES (?,?,?,?,?,?,?,?)`).run(hashToken(token), mac, context.client_ip, context.gw_id, userId, profile, nowIso, loginExpiresAt);
+    VALUES (?,?,?,?,?,?,?,?)`).run(hashToken(token), mac, context.client_ip, gatewayId, userId, profile, nowIso, loginExpiresAt);
   const host = gateway.includes(':') && !gateway.startsWith('[') ? `[${gateway}]` : gateway;
   const url = new URL(`http://${host}:${port}/wifidog/auth`);
   url.searchParams.set('token', token);
@@ -242,11 +352,13 @@ function authorize(context, profile, username, userId = null) {
   return { mode: 'redirect', url: url.toString(), profile };
 }
 function writeLog(userId, context, accessType) {
-  clearClientRevocation(context.client_mac);
-  trackClient(context);
+  const tracked = trackClient(context);
+  const gatewayId = tracked?.gatewayId || ensureGateway(context);
+  const mac = tracked?.mac || String(context.client_mac || '').trim().toLowerCase() || null;
+  clearClientRevocation(gatewayId, mac);
   const now = new Date().toISOString();
-  db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,timestamp) VALUES (?,?,?,?,?,?,?)').run(id(), userId, context.client_mac, context.client_ip, accessType, context.ssid, now);
-  if (context.client_mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=?, authorized_until=NULL WHERE mac_address=?').run(userId, accessType, 'pending', now, String(context.client_mac).toLowerCase());
+  db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,gateway_id,timestamp) VALUES (?,?,?,?,?,?,?,?)').run(id(), userId, mac, context.client_ip, accessType, context.ssid, gatewayId, now);
+  if (mac) db.prepare('UPDATE clients SET user_id=?, access_type=?, auth_status=?, last_seen_at=?, authorized_until=NULL WHERE gateway_id=? AND mac_address=?').run(userId, accessType, 'pending', now, gatewayId, mac);
 }
 
 function confirmWifiDogSession(url) {
@@ -254,22 +366,26 @@ function confirmWifiDogSession(url) {
   const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
   const mac = String(context.client_mac || '').trim().toLowerCase();
   const rawToken = String(url.searchParams.get('token') || '');
+  const tokenSession = rawToken ? db.prepare('SELECT * FROM captive_sessions WHERE token_hash=?').get(hashToken(rawToken)) : null;
+  const requestGatewayId = gatewayKey(context.gw_id || tokenSession?.gateway_id);
   const now = new Date();
   const nowIso = now.toISOString();
 
-  if (isClientRevoked(mac, nowIso)) return false;
-  trackClient(context);
+  if (isClientRevoked(requestGatewayId, mac, nowIso)) return false;
+  trackClient({ ...context, gw_id:requestGatewayId });
 
   if (stage === 'logout') {
     if (rawToken) db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
-    markClientOffline(mac, 'logout');
+    markClientOffline(requestGatewayId, mac, 'logout');
     return false;
   }
 
   if (stage === 'login') {
     if (!rawToken || !mac) return false;
-    const session = db.prepare('SELECT * FROM captive_sessions WHERE token_hash=?').get(hashToken(rawToken));
-    const gatewayMatches = !session?.gateway_id || !context.gw_id || session.gateway_id === context.gw_id;
+    const session = tokenSession;
+    const sessionGatewayId = gatewayKey(session?.gateway_id || requestGatewayId);
+    if (isClientRevoked(sessionGatewayId, mac, nowIso)) return false;
+    const gatewayMatches = !context.gw_id || sessionGatewayId === requestGatewayId;
     const canLogin = session && !session.revoked_at && session.mac_address === mac && gatewayMatches &&
       ((session.authorized_at && session.authorized_until > nowIso) || (!session.authorized_at && session.login_expires_at > nowIso));
     if (!canLogin) return false;
@@ -278,61 +394,69 @@ function confirmWifiDogSession(url) {
     const authorizedAt = session.authorized_at || nowIso;
     const authorizedUntil = session.authorized_until || new Date(now.getTime() + sessionHours * 60 * 60 * 1000).toISOString();
     db.prepare('UPDATE captive_sessions SET authorized_at=?,authorized_until=? WHERE token_hash=?').run(authorizedAt, authorizedUntil, hashToken(rawToken));
-    db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=? WHERE mac_address=?`)
-      .run(session.user_id, session.access_type, nowIso, authorizedUntil, mac);
+    db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=? WHERE gateway_id=? AND mac_address=?`)
+      .run(session.user_id, session.access_type, nowIso, authorizedUntil, sessionGatewayId, mac);
     if (firstAuthorization) createClientNotification('client_login', {
-      macAddress:mac, userId:session.user_id, accessType:session.access_type,
+      gatewayId:sessionGatewayId, macAddress:mac, userId:session.user_id, accessType:session.access_type,
       eventKey:`login:${hashToken(rawToken)}`
     });
     return true;
   }
 
   if (rawToken) {
-    const session = db.prepare('SELECT mac_address,authorized_at,authorized_until,revoked_at FROM captive_sessions WHERE token_hash=?').get(hashToken(rawToken));
+    const session = tokenSession;
     const valid = !!(session && !session.revoked_at && session.authorized_at && session.authorized_until > nowIso && (!mac || session.mac_address === mac));
-    if (session?.authorized_at && !valid && session.mac_address === mac) markClientOffline(mac, 'session-expired');
+    if (session?.authorized_at && !valid && session.mac_address === mac) markClientOffline(session.gateway_id, mac, 'session-expired');
     return valid;
   }
 
   if (!mac) return false;
-  const client = db.prepare('SELECT auth_status,authorized_until FROM clients WHERE mac_address=?').get(mac);
+  const client = db.prepare('SELECT auth_status,authorized_until FROM clients WHERE gateway_id=? AND mac_address=?').get(requestGatewayId, mac);
   const valid = client?.auth_status === 'authorized' && client.authorized_until && client.authorized_until > nowIso;
-  if (client?.auth_status === 'authorized' && !valid) markClientOffline(mac, 'session-expired');
+  if (client?.auth_status === 'authorized' && !valid) markClientOffline(requestGatewayId, mac, 'session-expired');
   return !!valid;
 }
 
-function deleteClientRecords(macAddress) {
+function deleteClientRecords(gatewayId, macAddress) {
+  const scopedGatewayId = gatewayKey(gatewayId);
   const mac = String(macAddress || '').trim().toLowerCase();
   if (!/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) return { error:'MAC address tidak valid.', status:400 };
-  const client = db.prepare('SELECT user_id FROM clients WHERE mac_address=?').get(mac);
+  const client = db.prepare('SELECT user_id FROM clients WHERE gateway_id=? AND mac_address=?').get(scopedGatewayId, mac);
   if (!client) return { error:'Data perangkat tidak ditemukan.', status:404 };
   const userId = client.user_id || null;
-  const relatedMacs = userId ? db.prepare('SELECT mac_address FROM clients WHERE user_id=? OR mac_address=?').all(userId, mac).map(row=>row.mac_address) : [mac];
-  const deviceCount = relatedMacs.length;
+  const relatedClients = userId
+    ? db.prepare('SELECT gateway_id,mac_address FROM clients WHERE user_id=?').all(userId)
+    : [{ gateway_id:scopedGatewayId, mac_address:mac }];
+  const deviceCount = relatedClients.length;
   db.exec('BEGIN IMMEDIATE');
   try {
     if (userId) {
-      db.prepare('DELETE FROM notifications WHERE user_id=? OR client_mac=?').run(userId, mac);
-      db.prepare('DELETE FROM captive_sessions WHERE user_id=? OR mac_address=?').run(userId, mac);
-      db.prepare('DELETE FROM access_logs WHERE user_id=? OR mac_address=?').run(userId, mac);
-      db.prepare('DELETE FROM clients WHERE user_id=? OR mac_address=?').run(userId, mac);
+      db.prepare('DELETE FROM notifications WHERE user_id=?').run(userId);
+      db.prepare('DELETE FROM captive_sessions WHERE user_id=?').run(userId);
+      db.prepare('DELETE FROM access_logs WHERE user_id=?').run(userId);
+      for (const relatedClient of relatedClients) {
+        db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(relatedClient.gateway_id, relatedClient.mac_address);
+        db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
+        db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
+      }
+      db.prepare('DELETE FROM clients WHERE user_id=?').run(userId);
       db.prepare('DELETE FROM users WHERE id=?').run(userId);
     } else {
-      db.prepare('DELETE FROM notifications WHERE client_mac=?').run(mac);
-      db.prepare('DELETE FROM captive_sessions WHERE mac_address=?').run(mac);
-      db.prepare('DELETE FROM access_logs WHERE mac_address=?').run(mac);
-      db.prepare('DELETE FROM clients WHERE mac_address=?').run(mac);
+      db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(scopedGatewayId, mac);
+      db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
+      db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
+      db.prepare('DELETE FROM clients WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
     }
     const revokedAt = new Date();
     const expiresAt = new Date(revokedAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
-    const revoke = db.prepare('INSERT OR REPLACE INTO revoked_clients (mac_hash,revoked_at,expires_at) VALUES (?,?,?)');
-    for (const relatedMac of relatedMacs) revoke.run(hashToken(relatedMac), revokedAt.toISOString(), expiresAt);
+    const revoke = db.prepare('INSERT OR REPLACE INTO revoked_gateway_clients (gateway_id,mac_hash,revoked_at,expires_at) VALUES (?,?,?,?)');
+    for (const relatedClient of relatedClients) revoke.run(relatedClient.gateway_id, hashToken(relatedClient.mac_address), revokedAt.toISOString(), expiresAt);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
-  return { ok:true, macAddress:mac, deletedAccount:!!userId, deletedDevices:deviceCount, gatewayAuthorizationRevoked:true };
+  return { ok:true, gatewayId:scopedGatewayId, macAddress:mac, deletedAccount:!!userId, deletedDevices:deviceCount, gatewayAuthorizationRevoked:true };
 }
 async function sendVerification(email, token) {
   const link = `${config.baseUrl}/?verify=${token}`;
@@ -434,13 +558,13 @@ async function api(req, res, url) {
     const reset = db.prepare(`SELECT token_hash,user_id FROM password_reset_tokens
       WHERE token_hash=? AND used_at IS NULL AND expires_at>?`).get(hashToken(token || ''), nowIso);
     if (!reset) return json(res, 400, { error:'Tautan reset tidak valid, sudah digunakan, atau kedaluwarsa.' });
-    const activeClients = db.prepare("SELECT mac_address FROM clients WHERE user_id=? AND auth_status='authorized'").all(reset.user_id);
+    const activeClients = db.prepare("SELECT gateway_id,mac_address FROM clients WHERE user_id=? AND auth_status='authorized'").all(reset.user_id);
     db.exec('BEGIN IMMEDIATE');
     try {
       db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(newPassword), reset.user_id);
       db.prepare('UPDATE password_reset_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL').run(nowIso, reset.user_id);
       db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(nowIso, reset.user_id);
-      for (const client of activeClients) markClientOffline(client.mac_address, 'password-reset');
+      for (const client of activeClients) markClientOffline(client.gateway_id, client.mac_address, 'password-reset');
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -458,37 +582,106 @@ async function api(req, res, url) {
   if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true, email:config.adminEmail }, { 'set-cookie': adminCookie(`${encodedEmail}.${sig}`) }); }
   if (route === '/api/admin/session' && req.method === 'GET') { if (!adminSession(req)) return json(res, 401, { error: 'Sesi admin diperlukan.' }); return json(res, 200, { ok:true, email:config.adminEmail }); }
   if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
+  if (route === '/api/admin/network' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    const projects = db.prepare(`SELECT p.id,p.name,p.location,p.created_at,
+      COUNT(DISTINCT CASE WHEN g.id<>'unassigned' OR c.mac_address IS NOT NULL THEN g.id END) AS gateway_count,COUNT(c.mac_address) AS client_count
+      FROM projects p LEFT JOIN gateways g ON g.project_id=p.id
+      LEFT JOIN clients c ON c.gateway_id=g.id
+      GROUP BY p.id ORDER BY CASE WHEN p.id='default-project' THEN 0 ELSE 1 END,p.name`).all();
+    const gateways = db.prepare(`SELECT g.id,g.project_id,g.name,g.location,g.model,g.created_at,g.last_seen_at,
+      p.name AS project_name,COUNT(c.mac_address) AS client_count,
+      SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized_count
+      FROM gateways g JOIN projects p ON p.id=g.project_id
+      LEFT JOIN clients c ON c.gateway_id=g.id
+      GROUP BY g.id ORDER BY CASE WHEN g.id='unassigned' THEN 1 ELSE 0 END,p.name,g.name`).all();
+    const offlineDeadline = new Date(Date.now() - (Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20) * 60 * 1000).toISOString();
+    return json(res, 200, {
+      projects,
+      gateways:gateways.map(gateway => ({ ...gateway, status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline' }))
+    });
+  }
+  if (route === '/api/admin/projects' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const name = String(payload.name || '').trim().slice(0,120);
+    const location = String(payload.location || '').trim().slice(0,180) || null;
+    if (!name) return json(res, 400, { error:'Nama project wajib diisi.' });
+    const project = { id:`project-${id().slice(0,12)}`, name, location, created_at:new Date().toISOString() };
+    db.prepare('INSERT INTO projects (id,name,location,created_at) VALUES (?,?,?,?)').run(project.id, project.name, project.location, project.created_at);
+    return json(res, 201, { project });
+  }
+  if (route === '/api/admin/gateways' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    if (!payload.gatewayId) return json(res, 400, { error:'ID gateway wajib diisi.' });
+    const gatewayId = gatewayKey(payload.gatewayId);
+    const projectId = String(payload.projectId || 'default-project').trim();
+    const project = db.prepare('SELECT id FROM projects WHERE id=?').get(projectId);
+    if (!project) return json(res, 400, { error:'Project tujuan tidak ditemukan.' });
+    const current = db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId);
+    const name = String(payload.name || current?.name || `Gateway ${gatewayId}`).trim().slice(0,120);
+    const location = String(payload.location ?? current?.location ?? '').trim().slice(0,180) || null;
+    const model = String(payload.model ?? current?.model ?? '').trim().slice(0,120) || null;
+    const createdAt = current?.created_at || new Date().toISOString();
+    db.prepare(`INSERT INTO gateways (id,project_id,name,location,model,created_at,last_seen_at) VALUES (?,?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,name=excluded.name,location=excluded.location,model=excluded.model`)
+      .run(gatewayId, projectId, name, location, model, createdAt, current?.last_seen_at || null);
+    return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
+  }
   if (route === '/api/admin/clients' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
     sweepOfflineClients();
-    const rows = db.prepare(`SELECT c.mac_address,c.client_ip,c.ssid,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,c.authorized_until,
+    const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
+    const projectId = String(url.searchParams.get('projectId') || '').trim();
+    const scopeSql = gatewayId ? ' WHERE c.gateway_id=?' : projectId ? ' WHERE g.project_id=?' : '';
+    const scopeParams = gatewayId ? [gatewayId] : projectId ? [projectId] : [];
+    const rows = db.prepare(`SELECT c.gateway_id,c.mac_address,c.client_ip,c.ssid,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,c.authorized_until,
+      g.name AS gateway_name,g.location AS gateway_location,g.model AS gateway_model,g.project_id,
+      p.name AS project_name,p.location AS project_location,
       u.full_name,u.email,u.phone_number,u.address,u.is_verified
       FROM clients c LEFT JOIN users u ON u.id=c.user_id
-      ORDER BY c.last_seen_at DESC LIMIT 250`).all();
+      JOIN gateways g ON g.id=c.gateway_id JOIN projects p ON p.id=g.project_id
+      ${scopeSql} ORDER BY c.last_seen_at DESC LIMIT 500`).all(...scopeParams);
     const fallbackSsid = db.prepare('SELECT default_ssid FROM portal_settings WHERE id=1').get()?.default_ssid || null;
     const clients = rows.map(row => ({ ...row, ssid:ssidFromGateway({ ssid:row.ssid }) || fallbackSsid }));
     const today = new Date().toISOString().slice(0,10);
-    const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
-      SUM(CASE WHEN auth_status='authorized' THEN 1 ELSE 0 END) AS authorized FROM clients`).get(today);
+    const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(c.last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
+      SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized
+      FROM clients c JOIN gateways g ON g.id=c.gateway_id ${scopeSql}`).get(today, ...scopeParams);
     return json(res, 200, { clients, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
   }
   if (route === '/api/admin/notifications' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
     sweepOfflineClients();
-    const notifications = db.prepare(`SELECT id,type,client_mac,title,message,created_at,read_at
-      FROM notifications ORDER BY created_at DESC LIMIT 40`).all();
-    const unreadCount = db.prepare('SELECT COUNT(*) AS total FROM notifications WHERE read_at IS NULL').get()?.total || 0;
+    const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
+    const projectId = String(url.searchParams.get('projectId') || '').trim();
+    const scopeCondition = gatewayId ? 'n.gateway_id=?' : projectId ? 'g.project_id=?' : '';
+    const scopeSql = scopeCondition ? ` WHERE ${scopeCondition}` : '';
+    const scopeParams = gatewayId ? [gatewayId] : projectId ? [projectId] : [];
+    const notifications = db.prepare(`SELECT n.id,n.type,n.client_mac,n.gateway_id,n.title,n.message,n.created_at,n.read_at,
+      g.name AS gateway_name,g.project_id,p.name AS project_name
+      FROM notifications n JOIN gateways g ON g.id=n.gateway_id JOIN projects p ON p.id=g.project_id
+      ${scopeSql} ORDER BY n.created_at DESC LIMIT 60`).all(...scopeParams);
+    const unreadWhere = scopeCondition ? `WHERE n.read_at IS NULL AND ${scopeCondition}` : 'WHERE n.read_at IS NULL';
+    const unreadCount = db.prepare(`SELECT COUNT(*) AS total FROM notifications n JOIN gateways g ON g.id=n.gateway_id ${unreadWhere}`).get(...scopeParams)?.total || 0;
     return json(res, 200, { notifications, unreadCount });
   }
   if (route === '/api/admin/notifications/read' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
-    db.prepare('UPDATE notifications SET read_at=? WHERE read_at IS NULL').run(new Date().toISOString());
+    const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
+    const projectId = String(url.searchParams.get('projectId') || '').trim();
+    const now = new Date().toISOString();
+    if (gatewayId) db.prepare('UPDATE notifications SET read_at=? WHERE read_at IS NULL AND gateway_id=?').run(now, gatewayId);
+    else if (projectId) db.prepare('UPDATE notifications SET read_at=? WHERE read_at IS NULL AND gateway_id IN (SELECT id FROM gateways WHERE project_id=?)').run(now, projectId);
+    else db.prepare('UPDATE notifications SET read_at=? WHERE read_at IS NULL').run(now);
     return json(res, 200, { ok:true });
   }
   if (route === '/api/admin/clients' && req.method === 'DELETE') {
     if (!requireAdmin(req,res)) return;
-    const { macAddress } = await body(req);
-    const result = deleteClientRecords(macAddress);
+    const { gatewayId, macAddress } = await body(req);
+    if (!gatewayId) return json(res, 400, { error:'Identitas gateway diperlukan agar data perangkat yang tepat dapat dihapus.' });
+    const result = deleteClientRecords(gatewayId, macAddress);
     if (result.error) return json(res, result.status, { error:result.error });
     return json(res, 200, result);
   }
@@ -506,12 +699,15 @@ const server = createServer(async (req, res) => {
     // slash is normal in ReyeeOS redirects, so normalize it before matching.
     const wifiDogPath = url.pathname.replace(/^\/+/,'/');
     if (wifiDogPath === '/auth/wifidogAuth/login/' || wifiDogPath === '/auth/wifidogAuth/login') {
+      trackClient(contextFrom(Object.fromEntries(url.searchParams.entries())));
       res.writeHead(200, { 'content-type': mime['.html'] }); return res.end(await readFile(join(root, 'index.html')));
     }
-    if (wifiDogPath === '/auth/wifidogAuth/ping/' || wifiDogPath === '/auth/wifidogAuth/ping') return text(res, 200, 'Pong');
+    if (wifiDogPath === '/auth/wifidogAuth/ping/' || wifiDogPath === '/auth/wifidogAuth/ping') {
+      ensureGateway(contextFrom(Object.fromEntries(url.searchParams.entries()))); return text(res, 200, 'Pong');
+    }
     if (wifiDogPath === '/auth/wifidogAuth/auth/' || wifiDogPath === '/auth/wifidogAuth/auth') {
       const stage = url.searchParams.get('stage');
-      if (stage === 'check') return text(res, 200, 'Auth: 1\n'); // Gateway health probe.
+      if (stage === 'check') { ensureGateway(contextFrom(Object.fromEntries(url.searchParams.entries()))); return text(res, 200, 'Auth: 1\n'); } // Gateway health probe.
       return text(res, 200, confirmWifiDogSession(url) ? 'Auth: 1\n' : 'Auth: 0\n');
     }
     if (wifiDogPath === '/auth/wifidogAuth/portal/' || wifiDogPath === '/auth/wifidogAuth/portal') {
