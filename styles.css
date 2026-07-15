@@ -139,6 +139,8 @@ body.admin-view .settings-layout{grid-template-columns:minmax(320px,600px) minma
 .nav-icon{width:18px;height:18px;flex:0 0 18px}
 .workspace-chevron{width:17px;height:17px;margin-left:auto;color:#bfccca}
 .sidebar-toggle:focus{outline:0}.sidebar-toggle:focus-visible{box-shadow:0 0 0 3px #04a99f2e}
+.header-action{display:grid;place-items:center;width:36px;height:36px;margin-right:7px;color:#66817f;background:#f3f9f8;border:1px solid #ddeae8;border-radius:10px}
+.header-action svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 body.admin-view .nav-item,body.admin-view .sidebar-bottom a{gap:11px}
 body.admin-view .nav-item>span,body.admin-view .sidebar-bottom a>span{min-width:0}
 body.admin-view .nav-item .nav-icon{color:#b9cac7;transition:color .2s}
@@ -174,3 +176,4 @@ body.admin-view .mini-button{padding:10px;border-radius:7px}
   .admin-login-card h2{font-size:27px;line-height:1.2}
   .admin-login-card>p{margin-bottom:23px}
 }
+@media(max-width:760px){body.admin-view .header-action{display:none}}

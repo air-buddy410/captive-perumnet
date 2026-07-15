@@ -11,6 +11,8 @@ assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Sta
 assert.match(html, /id="user-login-screen" class="login-page portal-modal"/, 'Login pelanggan harus memakai modal.');
 assert.match(html, /id="sidebar-toggle"/, 'Dashboard harus menyediakan tombol navigasi mobile.');
 assert.match(html, /class="nav-icon"[^>]*viewBox="0 0 24 24"/, 'Sidebar harus memakai ikon SVG yang konsisten.');
+assert.match(html, /class="header-action"[^>]*title="Notifikasi"/, 'Header admin harus memakai ikon notifikasi SVG.');
+assert.doesNotMatch(html, /class="bell">♢/, 'Header admin tidak boleh kembali memakai simbol berlian.');
 assert.doesNotMatch(html, /<span>⚙<\/span>|<span>▦<\/span>/, 'Sidebar tidak boleh kembali memakai emoji sebagai ikon.');
 assert.match(html, /placeholder="Username atau email"/, 'Login admin harus menyediakan placeholder identitas.');
 assert.match(html, /placeholder="Masukkan kata sandi"/, 'Login admin harus menyediakan placeholder kata sandi.');
