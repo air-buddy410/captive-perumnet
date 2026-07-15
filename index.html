@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260715-account" />
+    <link rel="stylesheet" href="/styles.css?v=20260716-privacy" />
   </head>
   <body>
     <main class="app-shell">
@@ -33,13 +33,13 @@
             <div class="input-grid"><label>Email<input name="email" type="email" placeholder="nama@email.com" required /></label><label>Nomor WhatsApp<input name="phone" type="tel" placeholder="08xx xxxx xxxx" required /></label></div>
             <label>Alamat<input name="address" placeholder="Kota atau alamat tempat tinggal" required /></label>
             <label>Kata sandi<input name="password" type="password" minlength="8" placeholder="Minimal 8 karakter" required /></label>
-            <label class="consent"><input name="consent" type="checkbox" required /><span>Saya setuju dengan <a href="#">Syarat & Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari Kopi Pagi.</span></label>
+            <label class="consent"><input name="consent" type="checkbox" required /><span>Saya setuju dengan <a href="#">Syarat & Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari PerumNet.</span></label>
             <p id="form-error" class="form-error" role="alert"></p>
             <button class="primary-button" type="submit">Daftar & Verifikasi Email <span>→</span></button>
           </form>
           <p class="account-prompt">Sudah punya akun? <button id="open-user-login" type="button">Masuk sekarang</button></p>
           <button class="text-button access-back" id="back-to-access-choice" type="button">← Pilih jenis akses lain</button>
-          <p class="privacy-note"><span>♢</span> Data Anda terlindungi dan tidak akan dibagikan ke pihak lain.</p>
+          <p class="privacy-note"><span class="privacy-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3 19 6v5c0 4.7-2.8 8.1-7 10-4.2-1.9-7-5.3-7-10V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg></span><span>Data Anda terlindungi dan tidak akan dibagikan ke pihak lain.</span></p>
           <a class="admin-link" href="#admin" id="admin-trigger">Masuk sebagai admin</a>
         </div>
         <div class="access-choice-wrap" id="access-choice">

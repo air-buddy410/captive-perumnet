@@ -225,3 +225,8 @@ body.account-action-view .account-action-page{min-height:100dvh}
   .account-status-card .brand{width:154px;height:77px;margin-bottom:20px}
   .account-status-card .brand img{width:133px}
 }
+
+/* Clear privacy assurance with a consistent shield-check icon */
+.privacy-note{display:flex;align-items:center;justify-content:center;gap:8px;max-width:440px;margin:18px auto 0;color:#89979e;text-align:left;font-size:11px;line-height:1.5}
+.privacy-icon{display:grid;place-items:center;flex:0 0 auto;width:24px;height:24px;color:var(--teal-dark);background:#e9f8f5;border-radius:8px}
+.privacy-icon svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}

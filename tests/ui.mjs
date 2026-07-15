@@ -17,6 +17,9 @@ assert.match(html, /id="forgot-password-screen" class="login-page portal-modal"/
 assert.match(html, /id="reset-password-screen" class="login-page account-action-page"/, 'Tautan reset harus membuka halaman khusus di luar hotspot.');
 assert.match(html, /id="account-status-screen" class="success-page account-action-page"/, 'Verifikasi email harus membuka halaman status khusus.');
 assert.doesNotMatch(html, /class="bell">♢/, 'Header admin tidak boleh kembali memakai simbol berlian.');
+assert.doesNotMatch(html, /class="privacy-note"><span>♢/, 'Catatan privasi tidak boleh memakai simbol berlian dekoratif.');
+assert.match(html, /class="privacy-icon"[^>]*aria-hidden="true"><svg/, 'Catatan privasi harus memakai ikon shield-check SVG.');
+assert.doesNotMatch(html, /penawaran dari Kopi Pagi/, 'Persetujuan data harus menggunakan identitas PerumNet.');
 assert.doesNotMatch(html, /<span>⚙<\/span>|<span>▦<\/span>/, 'Sidebar tidak boleh kembali memakai emoji sebagai ikon.');
 assert.doesNotMatch(html, /Email \/ Username|Username \/ Email|placeholder="Username atau email"/, 'Semua formulir login harus menggunakan email saja.');
 assert.match(html, /<form id="login-form"><label>Email<input type="email" placeholder="nama@email\.com"/, 'Login admin harus meminta email secara eksplisit.');
