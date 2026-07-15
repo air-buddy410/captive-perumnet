@@ -29,6 +29,7 @@ db.exec(`
     terms_text TEXT NOT NULL, google_sheet_id TEXT, updated_at TEXT NOT NULL
   );
 `);
+try { db.exec("ALTER TABLE portal_settings ADD COLUMN default_ssid TEXT NOT NULL DEFAULT 'PerumNet Guest'"); } catch { /* The column already exists after an upgrade. */ }
 db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,updated_at) VALUES (1,?,?,?,?,?)`)
   .run('Internet sesuai kebutuhan Anda.', 'Pilih akses cepat atau langsung terhubung dengan kecepatan terbatas.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
 
@@ -93,7 +94,7 @@ async function sendVerification(email, token) { const link = `${config.baseUrl}/
 
 async function api(req, res, url) {
   const route = url.pathname;
-  if (route === '/api/settings' && req.method === 'GET') return json(res, 200, db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text FROM portal_settings WHERE id=1').get());
+  if (route === '/api/settings' && req.method === 'GET') return json(res, 200, db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid FROM portal_settings WHERE id=1').get());
   if (route === '/api/auth/register' && req.method === 'POST') {
     const { fullName, email, phone, address, password, consent, context } = await body(req);
     if (!fullName || !email || !phone || !address || !password || !consent) return json(res, 400, { error: 'Lengkapi data pendaftaran dan persetujuan.' });
@@ -121,7 +122,7 @@ async function api(req, res, url) {
   if (route === '/api/captive/limited' && req.method === 'POST') { const { context } = await body(req); const captive = contextFrom(context); const setting = db.prepare('SELECT limited_bandwidth_kbps FROM portal_settings WHERE id=1').get(); writeLog(null, captive, 'limited'); return json(res, 200, { bandwidthKbps: setting.limited_bandwidth_kbps, authorization: authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`) }); }
   if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true }, { 'set-cookie': `perumnet_admin=${encodedEmail}.${sig}; HttpOnly; SameSite=Lax; Path=/` }); }
   if (route === '/api/admin/leads' && req.method === 'GET') { if (!requireAdmin(req,res)) return; const rows = db.prepare(`SELECT l.id,l.access_type,l.mac_address,l.client_ip,l.ssid,l.timestamp,u.full_name,u.email,u.phone_number,u.address,u.is_verified FROM access_logs l LEFT JOIN users u ON u.id=l.user_id ORDER BY l.timestamp DESC LIMIT 250`).all(); return json(res, 200, rows); }
-  if (route === '/api/admin/settings' && req.method === 'POST') { if (!requireAdmin(req,res)) return; const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId } = await body(req); db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,updated_at=? WHERE id=1').run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, new Date().toISOString()); return json(res, 200, { ok: true }); }
+  if (route === '/api/admin/settings' && req.method === 'POST') { if (!requireAdmin(req,res)) return; const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId,defaultSsid } = await body(req); db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,default_ssid=?,updated_at=? WHERE id=1').run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, String(defaultSsid || 'PerumNet Guest').trim(), new Date().toISOString()); return json(res, 200, { ok: true }); }
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
 }
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.svg':'image/svg+xml' };

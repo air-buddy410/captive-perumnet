@@ -26,7 +26,7 @@
 
         <div class="portal-form-wrap" id="portal-form-wrap">
           <div class="mobile-brand brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
-          <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b id="wifi-name">Kopi Pagi Guest</b></div>
+          <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b data-wifi-name>PerumNet Guest</b></div>
           <div class="form-heading"><span class="eyebrow">Buat akun PerumNet</span><h2>Dapatkan akses tanpa batas.</h2><p>Daftar sekali, verifikasi email, lalu nikmati koneksi High Speed setiap kali berkunjung.</p></div>
           <form id="lead-form" novalidate>
             <label>Nama lengkap<input name="name" placeholder="Contoh: Made Wirawan" required /></label>
@@ -44,7 +44,7 @@
         </div>
         <div class="access-choice-wrap" id="access-choice">
           <div class="mobile-brand brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div>
-          <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b>Kopi Pagi Guest</b></div>
+          <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b data-wifi-name>PerumNet Guest</b></div>
           <span class="eyebrow">Pilih akses Anda</span><h2>Internet sesuai kebutuhan Anda.</h2><p class="choice-intro">Pilih akses cepat untuk pengalaman penuh, atau langsung terhubung dengan kecepatan terbatas.</p>
           <form class="quick-login" id="quick-login-form"><div class="quick-login-heading"><b>Sudah punya akun?</b><span>Login langsung untuk akses High Speed</span></div><div class="quick-login-fields"><label>Email / Username<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Kata sandi" required /></label><button type="submit">Login <span>→</span></button></div></form>
           <button class="access-option high-speed-option" id="choose-high-speed" type="button"><span class="access-icon">⚡</span><span><b>Login / Daftar</b><strong>Internet cepat tanpa batas</strong><small>Buat akun atau login untuk akses High Speed.</small></span><i>→</i></button>
@@ -58,7 +58,7 @@
         <div class="success-card">
           <div class="success-icon">✓</div><span class="eyebrow">Berhasil terhubung</span><h2>Selamat menikmati<br />WiFi gratis!</h2>
           <p id="success-message">Data Anda telah tersimpan dan akses internet sudah aktif. Selamat berselancar.</p>
-          <div class="connected-to"><span class="wifi-mini">⌁</span><div><small>Terhubung ke jaringan</small><b id="success-wifi">Kopi Pagi Guest</b></div><i>●</i></div>
+          <div class="connected-to"><span class="wifi-mini">⌁</span><div><small>Terhubung ke jaringan</small><b data-wifi-name>PerumNet Guest</b></div><i>●</i></div>
           <button class="primary-button" id="browse-button">Mulai Browsing <span>↗</span></button>
           <button class="text-button" id="return-portal">Kembali ke portal</button>
         </div>
@@ -68,7 +68,7 @@
         <div class="success-card">
           <div class="limited-icon">⌁</div><span class="eyebrow">Akses terbatas aktif</span><h2>Anda sudah<br />terhubung.</h2>
           <p>Kecepatan internet Anda saat ini dibatasi hingga <b id="limited-bandwidth">512 Kbps</b>. Isi data untuk mendapatkan akses internet kecepatan penuh.</p>
-          <div class="connected-to"><span class="wifi-mini">⌁</span><div><small>Terhubung ke jaringan</small><b id="limited-wifi">Kopi Pagi Guest</b></div><i>●</i></div>
+          <div class="connected-to"><span class="wifi-mini">⌁</span><div><small>Terhubung ke jaringan</small><b data-wifi-name>PerumNet Guest</b></div><i>●</i></div>
           <button class="primary-button" id="upgrade-access">Daftar untuk Speed Penuh <span>→</span></button>
           <button class="text-button" id="continue-limited">Lanjutkan dengan akses terbatas</button>
         </div>
@@ -103,7 +103,7 @@
           <div id="leads-tab" class="tab-content active"><div class="stats"><article><div class="stat-symbol teal">◉</div><div><small>Total Pengunjung</small><b id="total-leads">1,248</b><em>↑ 12,5% <span>dari bulan lalu</span></em></div></article><article><div class="stat-symbol orange">◷</div><div><small>Hari Ini</small><b id="today-leads">32</b><em>↑ 8,2% <span>dari kemarin</span></em></div></article><article><div class="stat-symbol blue">⌁</div><div><small>Rata-rata / Hari</small><b>28</b><em class="neutral">Stabil <span>dalam 7 hari</span></em></div></article></div>
             <div class="table-card"><div class="table-heading"><div><h3>Daftar Pengunjung</h3><p>Data terbaru dari portal WiFi Anda.</p></div><button id="export-csv" class="outline-button">⇩ Ekspor CSV</button></div><div class="table-tools"><label class="search"><span>⌕</span><input id="search-input" placeholder="Cari nama atau email..." /></label><button class="filter-button">☷ Filter <span>⌄</span></button></div><div class="table-scroll"><table><thead><tr><th>Pengunjung</th><th>Nomor WhatsApp</th><th>Tipe Akses</th><th>Alamat</th><th>Waktu Akses</th><th></th></tr></thead><tbody id="lead-rows"></tbody></table></div><footer class="table-footer"><span id="result-count">Menampilkan 1–6 dari 1.248 data</span><div><button disabled>‹</button><button class="page-active">1</button><button>2</button><button>3</button><button>…</button><button>›</button></div></footer></div>
           </div>
-          <div id="settings-tab" class="tab-content"><div class="settings-layout"><div><span class="eyebrow">Personalisasi portal</span><h2>Tampilan Portal WiFi</h2><p class="subcopy">Sesuaikan identitas dan pesan yang dilihat pengunjung saat terhubung.</p><form id="settings-form" class="settings-form"><label>Nama jaringan WiFi<input id="setting-wifi" value="Kopi Pagi Guest" /></label><label>Judul sambutan<input id="setting-title" value="Terhubung dalam hitungan detik." /></label><label>Pesan pembuka<textarea id="setting-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</textarea></label><label>Syarat & Ketentuan<textarea>Saya setuju dengan Syarat & Ketentuan serta pengolahan data untuk informasi dan penawaran.</textarea></label><button class="primary-button">Simpan Perubahan <span>→</span></button></form></div><div class="portal-preview"><small>PRATINJAU</small><div class="mini-portal"><div class="mini-brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><div class="mini-signal">⌁</div><h3 id="preview-title">Terhubung dalam hitungan detik.</h3><p id="preview-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</p><div class="mini-input"></div><div class="mini-input"></div><div class="mini-button">Dapatkan Akses WiFi →</div></div></div></div></div>
+          <div id="settings-tab" class="tab-content"><div class="settings-layout"><div><span class="eyebrow">Personalisasi portal</span><h2>Tampilan Portal WiFi</h2><p class="subcopy">SSID aktif terdeteksi otomatis dari gateway. Nama default hanya digunakan saat portal dibuka tanpa konteks gateway.</p><form id="settings-form" class="settings-form"><label>Nama WiFi default<input id="setting-wifi" value="PerumNet Guest" /></label><label>Judul sambutan<input id="setting-title" value="Terhubung dalam hitungan detik." /></label><label>Pesan pembuka<textarea id="setting-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</textarea></label><label>Syarat & Ketentuan<textarea id="setting-terms">Saya setuju dengan Syarat & Ketentuan serta pengolahan data untuk informasi dan penawaran.</textarea></label><button class="primary-button">Simpan Perubahan <span>→</span></button></form></div><div class="portal-preview"><small>PRATINJAU</small><div class="mini-portal"><div class="mini-brand"><img src="assets/perumnet-logo.png" alt="PerumNet" /></div><div class="mini-signal">⌁</div><h3 id="preview-title">Terhubung dalam hitungan detik.</h3><p id="preview-copy">Lengkapi data singkat berikut untuk menikmati WiFi gratis.</p><div class="mini-input"></div><div class="mini-input"></div><div class="mini-button">Dapatkan Akses WiFi →</div></div></div></div></div>
         </div>
       </section>
     </main>
