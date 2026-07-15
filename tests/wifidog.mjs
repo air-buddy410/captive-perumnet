@@ -34,7 +34,7 @@ try {
   }
 
   const mac = '02:00:00:00:10:01';
-  const context = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac, ip:'10.1.10.10', ssid:'TEST' };
+  const context = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac, ip:'10.1.10.10', ssid:'VLAN10' };
   const limitedResponse = await fetch(`${baseUrl}/api/captive/limited`, {
     method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context })
   });
@@ -66,7 +66,7 @@ try {
   assert(queryLoggedOut.body === 'Auth: 0\n', 'Client logout tidak boleh tetap aktif.');
 
   const accountMac = '02:00:00:00:20:01';
-  const accountContext = { ...context, mac:accountMac, ip:'10.1.10.20' };
+  const accountContext = { ...context, mac:accountMac, ip:'10.1.10.20', wlan_name:'@PERUMNET_FreeWiFi' };
   const registerResponse = await fetch(`${baseUrl}/api/auth/register`, {
     method:'POST', headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ fullName:'WiFiDog Test', email:'wifidog-test@example.com', phone:'081234567890', address:'Test', password:'test-password-123', consent:true })
@@ -96,6 +96,10 @@ try {
   });
   const adminCookie = adminLogin.headers.get('set-cookie');
   assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  const clientsBeforeDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
+  const clientList = await clientsBeforeDelete.json();
+  assert(clientList.clients.some(client=>client.mac_address===mac && client.ssid==='PerumNet Guest'), 'Alias VLAN dari gateway harus diganti SSID fallback.');
+  assert(clientList.clients.some(client=>client.mac_address===accountMac && client.ssid==='@PERUMNET_FreeWiFi'), 'Parameter WLAN asli Ruijie harus diprioritaskan sebagai SSID.');
   const deleteResponse = await fetch(`${baseUrl}/api/admin/clients`, {
     method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ macAddress:accountMac })
   });

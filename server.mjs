@@ -92,11 +92,22 @@ function adminSession(req) { const value = cookie(req, 'perumnet_admin'); if (!v
 function adminCookie(value, maxAge = 60 * 60 * 24 * 7) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
 function requireAdmin(req, res) { if (!adminSession(req)) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return false; } return true; }
 async function body(req) { let value = ''; for await (const part of req) value += part; try { return value ? JSON.parse(value) : {}; } catch { throw new Error('JSON tidak valid.'); } }
+const networkAliasPattern = /^(?:vlan|network|lan)[\s_-]*\d+$/i;
+function ssidFromGateway(value = {}) {
+  const candidates = [value.wlan_name, value.ssid_name, value.essid, value.wifi_name, value.ap_ssid, value.ssid, value.SSID];
+  for (const candidate of candidates) {
+    const ssid = String(candidate || '').trim();
+    if (ssid && !networkAliasPattern.test(ssid)) return ssid.slice(0, 128);
+  }
+  return null;
+}
 function contextFrom(value = {}) {
   return {
     client_mac: value.client_mac || value.mac || null,
     client_ip: value.client_ip || value.ip || null,
-    ssid: value.ssid || null,
+    // Reyee Gateway may populate `ssid` with a network alias such as VLAN10.
+    // Prefer explicit WLAN parameters and never persist that alias as the SSID.
+    ssid: ssidFromGateway(value),
     login_url: value.login_url || null,
     logout_url: value.logout_url || null,
     orig_url: value.orig_url || value.url || null,
@@ -323,10 +334,12 @@ async function api(req, res, url) {
       u.full_name,u.email,u.phone_number,u.address,u.is_verified
       FROM clients c LEFT JOIN users u ON u.id=c.user_id
       ORDER BY c.last_seen_at DESC LIMIT 250`).all();
+    const fallbackSsid = db.prepare('SELECT default_ssid FROM portal_settings WHERE id=1').get()?.default_ssid || null;
+    const clients = rows.map(row => ({ ...row, ssid:ssidFromGateway({ ssid:row.ssid }) || fallbackSsid }));
     const today = new Date().toISOString().slice(0,10);
     const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
       SUM(CASE WHEN auth_status='authorized' THEN 1 ELSE 0 END) AS authorized FROM clients`).get(today);
-    return json(res, 200, { clients:rows, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
+    return json(res, 200, { clients, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
   }
   if (route === '/api/admin/clients' && req.method === 'DELETE') {
     if (!requireAdmin(req,res)) return;

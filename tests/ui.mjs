@@ -18,6 +18,8 @@ assert.doesNotMatch(html, /value="it@perumnet\.id"/, 'Login admin tidak boleh me
 assert.match(app, /const destinationUrl = 'https:\/\/perumnet\.id'/, 'Tujuan redirect PerumNet harus tetap eksplisit.');
 assert.match(app, /startDestinationRedirect\(\)/, 'Status koneksi harus memulai redirect otomatis.');
 assert.match(app, /data-label="Nomor HP"/, 'Tabel mobile harus memiliki label kartu data.');
+assert.match(app, /networkAliasPattern/, 'UI harus menolak network alias sebagai SSID.');
+assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\.wifi_name/, 'UI harus memprioritaskan parameter WLAN Ruijie.');
 assert.match(css, /body\.admin-view \.sidebar \.sidebar-brand[^}]*background:transparent/, 'Logo admin harus menyatu dengan sidebar.');
 assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpoint kartu mobile.');
 
