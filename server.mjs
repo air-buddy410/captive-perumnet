@@ -19,6 +19,12 @@ db.exec(`
     phone_number TEXT NOT NULL, address TEXT NOT NULL, password_hash TEXT NOT NULL,
     is_verified INTEGER NOT NULL DEFAULT 0, verification_token TEXT, created_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL, used_at TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_password_reset_user ON password_reset_tokens(user_id);
   CREATE TABLE IF NOT EXISTS access_logs (
     id TEXT PRIMARY KEY, user_id TEXT, mac_address TEXT, client_ip TEXT,
     access_type TEXT NOT NULL CHECK(access_type IN ('high_speed','limited')),
@@ -82,7 +88,8 @@ const config = {
   wifiDogTokenTtlSeconds: Number(process.env.WIFIDOG_TOKEN_TTL_SECONDS || 300),
   wifiDogSessionHours: Number(process.env.WIFIDOG_SESSION_HOURS || 12),
   wifiDogLimitedSessionHours: Number(process.env.WIFIDOG_LIMITED_SESSION_HOURS || 2),
-  clientOfflineMinutes: Number(process.env.CLIENT_OFFLINE_MINUTES || 20)
+  clientOfflineMinutes: Number(process.env.CLIENT_OFFLINE_MINUTES || 20),
+  passwordResetMinutes: Number(process.env.PASSWORD_RESET_MINUTES || 30)
 };
 const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({ host:config.smtpHost, port:config.smtpPort, secure:config.smtpSecure, auth:{ user:config.smtpUser, pass:config.smtpPassword } }) : null;
 const id = () => randomBytes(16).toString('hex');
@@ -341,6 +348,20 @@ async function sendVerification(email, token) {
   });
   return link;
 }
+async function sendPasswordReset(email, token) {
+  const link = `${config.baseUrl}/?reset=${token}`;
+  if (!mailTransport) {
+    if (config.nodeEnv === 'production') throw new Error('SMTP_NOT_CONFIGURED');
+    await appendFile(join(dataDir, 'email-outbox.ndjson'), JSON.stringify({ to:email, type:'reset-password', link, createdAt:new Date().toISOString() }) + '\n');
+    return link;
+  }
+  await mailTransport.sendMail({
+    from:`PerumNet WiFi <${config.emailFrom}>`, to:email, subject:'Reset kata sandi WiFi PerumNet',
+    text:`Atur ulang kata sandi akun PerumNet Anda melalui tautan berikut: ${link}. Tautan ini hanya berlaku sementara.`,
+    html:`<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px"><h2 style="color:#008d85">Reset kata sandi PerumNet</h2><p>Klik tombol berikut untuk membuat kata sandi baru. Tautan ini berlaku selama ${config.passwordResetMinutes} menit dan hanya dapat digunakan satu kali.</p><p><a href="${link}" style="display:inline-block;padding:12px 20px;color:#fff;background:#04a99f;border-radius:8px;text-decoration:none;font-weight:700">Buat Kata Sandi Baru</a></p><p style="color:#71828b;font-size:12px">Jika Anda tidak meminta reset kata sandi, abaikan email ini.</p></div>`
+  });
+  return link;
+}
 
 async function api(req, res, url) {
   const route = url.pathname;
@@ -374,10 +395,58 @@ async function api(req, res, url) {
     return json(res, 200, { message:'Email verifikasi dikirim ulang.' });
   }
   if (route === '/api/auth/verify' && req.method === 'POST') {
-    const { token, context } = await body(req); const user = db.prepare('SELECT id,email FROM users WHERE verification_token=?').get(hashToken(token || ''));
+    const { token } = await body(req); const user = db.prepare('SELECT id FROM users WHERE verification_token=?').get(hashToken(token || ''));
     if (!user) return json(res, 400, { error: 'Tautan verifikasi tidak valid atau sudah digunakan.' });
-    db.prepare('UPDATE users SET is_verified=1, verification_token=NULL WHERE id=?').run(user.id); const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed');
-    return json(res, 200, { message: 'Email terverifikasi.', authorization: authorize(captive, 'high_speed', user.email, user.id) });
+    db.prepare('UPDATE users SET is_verified=1, verification_token=NULL WHERE id=?').run(user.id);
+    return json(res, 200, { message: 'Email berhasil diverifikasi.' });
+  }
+  if (route === '/api/auth/forgot-password' && req.method === 'POST') {
+    const { email } = await body(req);
+    const normalized = String(email || '').toLowerCase().trim();
+    const genericMessage = 'Jika email terdaftar, tautan reset kata sandi akan dikirim.';
+    const user = db.prepare('SELECT id,email FROM users WHERE email=?').get(normalized);
+    if (!user) return json(res, 200, { message:genericMessage });
+    const now = new Date();
+    const recentRequest = db.prepare('SELECT created_at FROM password_reset_tokens WHERE user_id=? ORDER BY created_at DESC LIMIT 1').get(user.id);
+    if (recentRequest && new Date(recentRequest.created_at).getTime() > now.getTime() - 60 * 1000) return json(res, 200, { message:genericMessage });
+    const retentionDeadline = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    db.prepare('DELETE FROM password_reset_tokens WHERE expires_at<? OR (used_at IS NOT NULL AND used_at<?)').run(retentionDeadline, retentionDeadline);
+    const token = randomBytes(32).toString('hex');
+    const tokenHash = hashToken(token);
+    const configuredMinutes = Number.isFinite(config.passwordResetMinutes) && config.passwordResetMinutes > 0 ? config.passwordResetMinutes : 30;
+    const expiresAt = new Date(now.getTime() + configuredMinutes * 60 * 1000).toISOString();
+    db.prepare('INSERT INTO password_reset_tokens (token_hash,user_id,created_at,expires_at) VALUES (?,?,?,?)')
+      .run(tokenHash, user.id, now.toISOString(), expiresAt);
+    try { await sendPasswordReset(user.email, token); }
+    catch (error) {
+      db.prepare('DELETE FROM password_reset_tokens WHERE token_hash=?').run(tokenHash);
+      console.error('Password reset email failed:', error.message);
+      return json(res, 503, { error:'Email reset kata sandi belum dapat dikirim. Coba kembali beberapa saat lagi.' });
+    }
+    db.prepare('UPDATE password_reset_tokens SET used_at=? WHERE user_id=? AND token_hash<>? AND used_at IS NULL').run(now.toISOString(), user.id, tokenHash);
+    return json(res, 200, { message:genericMessage });
+  }
+  if (route === '/api/auth/reset-password' && req.method === 'POST') {
+    const { token, password } = await body(req);
+    const newPassword = String(password || '');
+    if (newPassword.length < 8) return json(res, 400, { error:'Kata sandi baru minimal 8 karakter.' });
+    const nowIso = new Date().toISOString();
+    const reset = db.prepare(`SELECT token_hash,user_id FROM password_reset_tokens
+      WHERE token_hash=? AND used_at IS NULL AND expires_at>?`).get(hashToken(token || ''), nowIso);
+    if (!reset) return json(res, 400, { error:'Tautan reset tidak valid, sudah digunakan, atau kedaluwarsa.' });
+    const activeClients = db.prepare("SELECT mac_address FROM clients WHERE user_id=? AND auth_status='authorized'").all(reset.user_id);
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(hashPassword(newPassword), reset.user_id);
+      db.prepare('UPDATE password_reset_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL').run(nowIso, reset.user_id);
+      db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(nowIso, reset.user_id);
+      for (const client of activeClients) markClientOffline(client.mac_address, 'password-reset');
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    return json(res, 200, { message:'Kata sandi berhasil diperbarui.' });
   }
   if (route === '/api/auth/login' && req.method === 'POST') {
     const { email, password, context } = await body(req); const user = db.prepare('SELECT * FROM users WHERE email=?').get(String(email || '').toLowerCase().trim());

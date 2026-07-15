@@ -46,7 +46,7 @@
           <div class="mobile-brand brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div>
           <div class="form-topline"><span class="location-dot"></span> Anda terhubung ke <b data-wifi-name>PerumNet Guest</b></div>
           <span class="eyebrow">Pilih akses Anda</span><h2 id="portal-title">Internet sesuai kebutuhan Anda.</h2><p id="portal-copy" class="choice-intro">Pilih akses cepat untuk pengalaman penuh, atau langsung terhubung dengan kecepatan terbatas.</p>
-          <form class="quick-login" id="quick-login-form"><div class="quick-login-heading"><b>Sudah punya akun?</b><span>Login langsung untuk akses High Speed</span></div><div class="quick-login-fields"><label>Email / Username<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Kata sandi" required /></label><button type="submit">Login <span>→</span></button></div><p id="quick-login-error" class="inline-feedback" role="alert"></p></form>
+          <form class="quick-login" id="quick-login-form"><div class="quick-login-heading"><b>Sudah punya akun?</b><span>Login langsung untuk akses High Speed</span></div><div class="quick-login-fields"><label>Email<input type="email" placeholder="nama@email.com" autocomplete="email" required /></label><label>Kata sandi<input type="password" placeholder="Kata sandi" autocomplete="current-password" required /></label><button type="submit">Login <span>→</span></button></div><button class="forgot-password-link" data-forgot-password="portal" type="button">Lupa kata sandi?</button><p id="quick-login-error" class="inline-feedback" role="alert"></p></form>
           <button class="access-option high-speed-option" id="choose-high-speed" type="button"><span class="access-icon">⚡</span><span><b>Login / Daftar</b><strong>Internet cepat tanpa batas</strong><small>Buat akun atau login untuk akses High Speed.</small></span><i>→</i></button>
           <button class="access-option limited-option" id="choose-limited" type="button"><span class="access-icon">⌁</span><span><b>Langsung Internet</b><strong>Kecepatan terbatas</strong><small>Tanpa isi data · Maks. <span id="choice-bandwidth">512 Kbps</span> · <span id="choice-duration">2 jam</span></small></span><i>→</i></button>
           <p class="choice-terms">Dengan melanjutkan, Anda menyetujui <a href="#">Ketentuan penggunaan jaringan</a>.</p>
@@ -87,13 +87,29 @@
 
       <section id="user-login-screen" class="login-page portal-modal" role="dialog" aria-modal="true" aria-labelledby="user-login-title">
         <div class="login-card modal-card"><button class="modal-close" id="close-user-login" type="button" aria-label="Tutup login">×</button><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Akun pelanggan</span><h2 id="user-login-title">Masuk untuk internet cepat</h2><p>Gunakan akun yang telah terverifikasi untuk memperoleh akses High Speed.</p>
-          <form id="user-login-form"><label>Email<input type="email" placeholder="nama@email.com" required /></label><label>Kata sandi<input type="password" placeholder="Masukkan kata sandi" required /></label><p id="user-login-error" class="inline-feedback" role="alert"></p><button class="primary-button">Masuk & Sambungkan <span>→</span></button></form><button class="text-button" id="back-from-user-login">← Kembali ke pilihan akses</button>
+          <form id="user-login-form"><label>Email<input type="email" placeholder="nama@email.com" autocomplete="email" required /></label><label>Kata sandi<input type="password" placeholder="Masukkan kata sandi" autocomplete="current-password" required /></label><button class="forgot-password-link form-forgot-link" data-forgot-password="userLogin" type="button">Lupa kata sandi?</button><p id="user-login-error" class="inline-feedback" role="alert"></p><button class="primary-button">Masuk & Sambungkan <span>→</span></button></form><button class="text-button" id="back-from-user-login">← Kembali ke pilihan akses</button>
         </div>
+      </section>
+
+      <section id="forgot-password-screen" class="login-page portal-modal" role="dialog" aria-modal="true" aria-labelledby="forgot-password-title">
+        <div class="login-card modal-card account-recovery-card"><button class="modal-close" id="close-forgot-password" type="button" aria-label="Tutup reset kata sandi">×</button><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Pemulihan akun</span><h2 id="forgot-password-title">Lupa kata sandi?</h2><p>Masukkan email akun Anda. Kami akan mengirim tautan untuk membuat kata sandi baru.</p>
+          <form id="forgot-password-form"><label>Email<input name="email" type="email" placeholder="nama@email.com" autocomplete="email" required /></label><p id="forgot-password-feedback" class="inline-feedback" role="status"></p><button class="primary-button">Kirim Tautan Reset <span>→</span></button></form><button class="text-button" id="back-from-forgot-password">← Kembali</button>
+        </div>
+      </section>
+
+      <section id="reset-password-screen" class="login-page account-action-page" aria-labelledby="reset-password-title">
+        <div class="login-card account-recovery-card"><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Keamanan akun</span><h2 id="reset-password-title">Buat kata sandi baru</h2><p>Gunakan minimal 8 karakter dan pastikan kata sandi mudah Anda ingat.</p>
+          <form id="reset-password-form"><label>Kata sandi baru<input name="password" type="password" minlength="8" placeholder="Minimal 8 karakter" autocomplete="new-password" required /></label><label>Konfirmasi kata sandi<input name="confirmPassword" type="password" minlength="8" placeholder="Ulangi kata sandi baru" autocomplete="new-password" required /></label><p id="reset-password-feedback" class="inline-feedback" role="alert"></p><button class="primary-button">Simpan Kata Sandi Baru <span>→</span></button></form>
+        </div>
+      </section>
+
+      <section id="account-status-screen" class="success-page account-action-page" aria-labelledby="account-status-title">
+        <div class="success-card account-status-card"><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><div class="success-icon" id="account-status-icon">✓</div><span class="eyebrow" id="account-status-eyebrow">Akun berhasil diperbarui</span><h2 id="account-status-title">Email berhasil diverifikasi.</h2><p id="account-status-message">Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.</p><button class="primary-button" id="account-status-action">Buka Situs PerumNet <span>↗</span></button></div>
       </section>
 
       <section id="login-screen" class="login-page">
         <div class="login-card admin-login-card"><div class="admin-login-brand"><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div></div><span class="eyebrow">Area administrator</span><h2>Masuk ke dashboard</h2><p>Kelola data pengunjung dan tampilan portal PerumNet Anda.</p>
-          <form id="login-form"><label>Username / Email<input type="text" placeholder="Username atau email" autocomplete="username" required /></label><label>Kata sandi<input type="password" placeholder="Masukkan kata sandi" autocomplete="current-password" required /></label><button class="primary-button">Masuk ke Dashboard <span>→</span></button></form><button class="text-button" id="back-portal">← Kembali ke portal</button>
+          <form id="login-form"><label>Email<input type="email" placeholder="nama@email.com" autocomplete="email" required /></label><label>Kata sandi<input type="password" placeholder="Masukkan kata sandi" autocomplete="current-password" required /></label><button class="primary-button">Masuk ke Dashboard <span>→</span></button></form><button class="text-button" id="back-portal">← Kembali ke portal</button>
         </div>
       </section>
 

@@ -17,3 +17,5 @@ Gunakan `REYEE_AUTH_MODE=redirect` saat konfigurasi gateway telah siap. Jika gat
 Dashboard membuat notifikasi ketika gateway mengonfirmasi login, serta ketika client logout, masa akses berakhir, atau heartbeat tidak lagi diterima. Batas client dianggap offline dapat diatur dengan `CLIENT_OFFLINE_MINUTES` (default 20 menit). Nilai ini sebaiknya lebih panjang dari interval counters/heartbeat pada gateway.
 
 Untuk deployment, gunakan HTTPS publik, set `APP_BASE_URL`, ganti semua credential default, lalu isi konfigurasi `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, dan `EMAIL_FROM` untuk email verifikasi.
+
+Tautan lupa kata sandi memakai SMTP yang sama, hanya dapat digunakan satu kali, dan berlaku 30 menit. Durasi ini dapat diubah melalui `PASSWORD_RESET_MINUTES`.

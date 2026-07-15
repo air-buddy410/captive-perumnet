@@ -75,14 +75,37 @@ try {
   const outbox = (await readFile(join(dataDir, 'email-outbox.ndjson'), 'utf8')).trim().split('\n').map(JSON.parse);
   const verificationToken = new URL(outbox.at(-1).link).searchParams.get('verify');
   const verifyResponse = await fetch(`${baseUrl}/api/auth/verify`, {
-    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ token:verificationToken, context:accountContext })
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ token:verificationToken })
   });
   const verified = await verifyResponse.json();
-  assert(verifyResponse.status === 200 && verified.authorization?.protocol === 'wifidog', 'Verifikasi akun harus membuat token High Speed.');
+  assert(verifyResponse.status === 200 && verified.message && !verified.authorization, 'Verifikasi email hanya boleh menampilkan status berhasil tanpa masuk ke hotspot.');
+
+  const forgotResponse = await fetch(`${baseUrl}/api/auth/forgot-password`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ email:'wifidog-test@example.com' })
+  });
+  assert(forgotResponse.status === 200, 'Permintaan lupa kata sandi harus diterima.');
+  const resetOutbox = (await readFile(join(dataDir, 'email-outbox.ndjson'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const resetEmail = resetOutbox.at(-1);
+  const resetToken = new URL(resetEmail.link).searchParams.get('reset');
+  assert(resetEmail.type === 'reset-password' && resetToken?.length === 64, 'Email reset harus membawa token sekali pakai.');
+  const newPassword = 'new-test-password-456';
+  const resetResponse = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ token:resetToken, password:newPassword })
+  });
+  assert(resetResponse.status === 200, 'Kata sandi baru harus dapat disimpan.');
+  const reusedReset = await fetch(`${baseUrl}/api/auth/reset-password`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ token:resetToken, password:'another-password-789' })
+  });
+  assert(reusedReset.status === 400, 'Token reset tidak boleh digunakan dua kali.');
+  const oldPasswordLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:'wifidog-test@example.com', password:'test-password-123', context:accountContext })
+  });
+  assert(oldPasswordLogin.status === 401, 'Kata sandi lama harus langsung tidak berlaku.');
 
   const loginResponse = await fetch(`${baseUrl}/api/auth/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
-    body:JSON.stringify({ email:'wifidog-test@example.com', password:'test-password-123', context:accountContext })
+    body:JSON.stringify({ email:'wifidog-test@example.com', password:newPassword, context:accountContext })
   });
   const accountLogin = await loginResponse.json();
   const accountGatewayUrl = new URL(accountLogin.authorization.url);
@@ -126,7 +149,7 @@ try {
   assert(!deletedClientList.clients.some(client=>client.mac_address===accountMac), 'Perangkat yang dicabut tidak boleh muncul kembali hanya karena polling gateway.');
   const removedLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
-    body:JSON.stringify({ email:'wifidog-test@example.com', password:'test-password-123', context:accountContext })
+    body:JSON.stringify({ email:'wifidog-test@example.com', password:newPassword, context:accountContext })
   });
   assert(removedLogin.status === 401, 'Akun yang dihapus tidak boleh dapat login kembali.');
   console.log('WiFiDog token handshake: PASS');
