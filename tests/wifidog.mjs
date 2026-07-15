@@ -13,6 +13,7 @@ const child = spawn(process.execPath, ['server.mjs'], {
     PORT:String(port), APP_BASE_URL:baseUrl, PORTAL_DATA_DIR:dataDir,
     REYEE_AUTH_MODE:'redirect', NODE_ENV:'test',
     WIFIDOG_LIMITED_SESSION_HOURS:'0.0005',
+    ADMIN_EMAIL:'admin-test@example.com', ADMIN_PASSWORD:'admin-test-password',
     SMTP_HOST:'', SMTP_USER:'', SMTP_PASSWORD:'', EMAIL_FROM:''
   },
   stdio: ['ignore', 'pipe', 'pipe']
@@ -89,6 +90,29 @@ try {
   assert(loginResponse.status === 200 && accountLogin.authorization.profile === 'high_speed', 'Login akun terverifikasi harus membuat token High Speed.');
   const accountAuth = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
   assert(accountAuth.body === 'Auth: 1\n', 'Gateway harus menerima token login akun terverifikasi.');
+  const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:'admin-test@example.com', password:'admin-test-password' })
+  });
+  const adminCookie = adminLogin.headers.get('set-cookie');
+  assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  const deleteResponse = await fetch(`${baseUrl}/api/admin/clients`, {
+    method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ macAddress:accountMac })
+  });
+  const deleted = await deleteResponse.json();
+  assert(deleteResponse.status === 200 && deleted.deletedAccount && deleted.gatewayAuthorizationRevoked, 'Hapus admin harus menghapus akun dan mencabut otorisasi gateway.');
+  const revokedCounter = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
+  assert(revokedCounter.body === 'Auth: 0\n', 'Token lama harus ditolak setelah data dihapus admin.');
+  const revokedQuery = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}`);
+  assert(revokedQuery.body === 'Auth: 0\n', 'MAC lama harus tidak terotorisasi setelah data dihapus admin.');
+  const clientsAfterDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
+  const deletedClientList = await clientsAfterDelete.json();
+  assert(!deletedClientList.clients.some(client=>client.mac_address===accountMac), 'Perangkat yang dicabut tidak boleh muncul kembali hanya karena polling gateway.');
+  const removedLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:'wifidog-test@example.com', password:'test-password-123', context:accountContext })
+  });
+  assert(removedLogin.status === 401, 'Akun yang dihapus tidak boleh dapat login kembali.');
   console.log('WiFiDog token handshake: PASS');
 } finally {
   child.kill('SIGTERM');

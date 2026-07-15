@@ -40,6 +40,9 @@ db.exec(`
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_captive_sessions_mac ON captive_sessions(mac_address);
+  CREATE TABLE IF NOT EXISTS revoked_clients (
+    mac_hash TEXT PRIMARY KEY, revoked_at TEXT NOT NULL, expires_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS portal_settings (
     id INTEGER PRIMARY KEY CHECK(id = 1), welcome_title TEXT NOT NULL,
     welcome_text TEXT NOT NULL, limited_bandwidth_kbps INTEGER NOT NULL DEFAULT 512,
@@ -116,6 +119,21 @@ function trackClient(context) {
       gateway_id=COALESCE(excluded.gateway_id,clients.gateway_id),
       last_seen_at=excluded.last_seen_at`).run(mac, context.client_ip, context.ssid, context.gw_id, now, now);
 }
+function clearClientRevocation(macAddress) {
+  const mac = String(macAddress || '').trim().toLowerCase();
+  if (mac) db.prepare('DELETE FROM revoked_clients WHERE mac_hash=?').run(hashToken(mac));
+}
+function isClientRevoked(macAddress, nowIso = new Date().toISOString()) {
+  const mac = String(macAddress || '').trim().toLowerCase();
+  if (!mac) return false;
+  const macHash = hashToken(mac);
+  const revoked = db.prepare('SELECT expires_at FROM revoked_clients WHERE mac_hash=?').get(macHash);
+  if (revoked && revoked.expires_at <= nowIso) {
+    db.prepare('DELETE FROM revoked_clients WHERE mac_hash=?').run(macHash);
+    return false;
+  }
+  return !!revoked;
+}
 function wifiDogAuthorization(context, profile, userId) {
   if (!context.gw_address || !context.gw_port) return null;
   const port = Number(context.gw_port);
@@ -154,6 +172,7 @@ function authorize(context, profile, username, userId = null) {
   return { mode: 'redirect', url: url.toString(), profile };
 }
 function writeLog(userId, context, accessType) {
+  clearClientRevocation(context.client_mac);
   trackClient(context);
   const now = new Date().toISOString();
   db.prepare('INSERT INTO access_logs (id,user_id,mac_address,client_ip,access_type,ssid,timestamp) VALUES (?,?,?,?,?,?,?)').run(id(), userId, context.client_mac, context.client_ip, accessType, context.ssid, now);
@@ -163,11 +182,13 @@ function writeLog(userId, context, accessType) {
 function confirmWifiDogSession(url) {
   const stage = String(url.searchParams.get('stage') || '').toLowerCase();
   const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
-  trackClient(context);
   const mac = String(context.client_mac || '').trim().toLowerCase();
   const rawToken = String(url.searchParams.get('token') || '');
   const now = new Date();
   const nowIso = now.toISOString();
+
+  if (isClientRevoked(mac, nowIso)) return false;
+  trackClient(context);
 
   if (stage === 'logout') {
     if (rawToken) db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
@@ -201,6 +222,38 @@ function confirmWifiDogSession(url) {
   const valid = client?.auth_status === 'authorized' && client.authorized_until && client.authorized_until > nowIso;
   if (client?.auth_status === 'authorized' && !valid) db.prepare("UPDATE clients SET auth_status='pending',access_type=NULL,user_id=NULL,authorized_until=NULL WHERE mac_address=?").run(mac);
   return !!valid;
+}
+
+function deleteClientRecords(macAddress) {
+  const mac = String(macAddress || '').trim().toLowerCase();
+  if (!/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/.test(mac)) return { error:'MAC address tidak valid.', status:400 };
+  const client = db.prepare('SELECT user_id FROM clients WHERE mac_address=?').get(mac);
+  if (!client) return { error:'Data perangkat tidak ditemukan.', status:404 };
+  const userId = client.user_id || null;
+  const relatedMacs = userId ? db.prepare('SELECT mac_address FROM clients WHERE user_id=? OR mac_address=?').all(userId, mac).map(row=>row.mac_address) : [mac];
+  const deviceCount = relatedMacs.length;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    if (userId) {
+      db.prepare('DELETE FROM captive_sessions WHERE user_id=? OR mac_address=?').run(userId, mac);
+      db.prepare('DELETE FROM access_logs WHERE user_id=? OR mac_address=?').run(userId, mac);
+      db.prepare('DELETE FROM clients WHERE user_id=? OR mac_address=?').run(userId, mac);
+      db.prepare('DELETE FROM users WHERE id=?').run(userId);
+    } else {
+      db.prepare('DELETE FROM captive_sessions WHERE mac_address=?').run(mac);
+      db.prepare('DELETE FROM access_logs WHERE mac_address=?').run(mac);
+      db.prepare('DELETE FROM clients WHERE mac_address=?').run(mac);
+    }
+    const revokedAt = new Date();
+    const expiresAt = new Date(revokedAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const revoke = db.prepare('INSERT OR REPLACE INTO revoked_clients (mac_hash,revoked_at,expires_at) VALUES (?,?,?)');
+    for (const relatedMac of relatedMacs) revoke.run(hashToken(relatedMac), revokedAt.toISOString(), expiresAt);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return { ok:true, macAddress:mac, deletedAccount:!!userId, deletedDevices:deviceCount, gatewayAuthorizationRevoked:true };
 }
 async function sendVerification(email, token) {
   const link = `${config.baseUrl}/?verify=${token}`;
@@ -274,6 +327,13 @@ async function api(req, res, url) {
     const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
       SUM(CASE WHEN auth_status='authorized' THEN 1 ELSE 0 END) AS authorized FROM clients`).get(today);
     return json(res, 200, { clients:rows, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
+  }
+  if (route === '/api/admin/clients' && req.method === 'DELETE') {
+    if (!requireAdmin(req,res)) return;
+    const { macAddress } = await body(req);
+    const result = deleteClientRecords(macAddress);
+    if (result.error) return json(res, result.status, { error:result.error });
+    return json(res, 200, result);
   }
   if (route === '/api/admin/settings' && req.method === 'POST') { if (!requireAdmin(req,res)) return; const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId,defaultSsid } = await body(req); db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,default_ssid=?,updated_at=? WHERE id=1').run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, String(defaultSsid || 'PerumNet Guest').trim(), new Date().toISOString()); return json(res, 200, { ok: true }); }
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
