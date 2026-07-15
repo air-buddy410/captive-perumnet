@@ -5,6 +5,8 @@ import { join, normalize, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 
+try { process.loadEnvFile?.('.env'); } catch { /* .env is optional for local development */ }
+
 const root = fileURLToPath(new URL('.', import.meta.url));
 const dataDir = join(root, 'data');
 await mkdir(dataDir, { recursive: true });
