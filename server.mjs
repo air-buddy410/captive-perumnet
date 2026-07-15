@@ -46,6 +46,7 @@ const config = {
 };
 const id = () => randomBytes(16).toString('hex');
 const json = (res, status, value, headers = {}) => res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers }).end(JSON.stringify(value));
+const text = (res, status, value, headers = {}) => res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', ...headers }).end(value);
 const hashPassword = (password) => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 const verifyPassword = (password, stored) => { const [salt, key] = stored.split(':'); const actual = scryptSync(password, salt, 64).toString('hex'); return timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(key, 'hex')); };
 const hashToken = (token) => createHash('sha256').update(token).digest('hex');
@@ -129,5 +130,26 @@ async function api(req, res, url) {
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
 }
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.svg':'image/svg+xml' };
-const server = createServer(async (req, res) => { const url = new URL(req.url, config.baseUrl); try { if (url.pathname.startsWith('/api/')) return await api(req,res,url); let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/') ? '/index.html' : url.pathname; const target = normalize(join(root, pathname)); if (!target.startsWith(root)) return json(res, 403, { error: 'Forbidden' }); await stat(target); res.writeHead(200, { 'content-type': mime[extname(target)] || 'application/octet-stream' }); res.end(await readFile(target)); } catch (error) { if (error.code === 'ENOENT') return json(res, 404, { error: 'Tidak ditemukan.' }); console.error(error); json(res, 500, { error: 'Kesalahan server.' }); } });
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url, config.baseUrl);
+  try {
+    // Reyee WiFiDog appends these paths to the Auth Server URL. A leading double
+    // slash is normal in ReyeeOS redirects, so normalize it before matching.
+    const wifiDogPath = url.pathname.replace(/^\/+/,'/');
+    if (wifiDogPath === '/auth/wifidogAuth/login/' || wifiDogPath === '/auth/wifidogAuth/login') {
+      res.writeHead(200, { 'content-type': mime['.html'] }); return res.end(await readFile(join(root, 'index.html')));
+    }
+    if (wifiDogPath === '/auth/wifidogAuth/ping/' || wifiDogPath === '/auth/wifidogAuth/ping') return text(res, 200, 'Pong');
+    if (wifiDogPath === '/auth/wifidogAuth/auth/' || wifiDogPath === '/auth/wifidogAuth/auth') {
+      // check is a gateway health probe; query asks whether an unauthenticated
+      // station already has a session. No session is granted at this stage.
+      return text(res, 200, url.searchParams.get('stage') === 'check' ? 'Auth: 1\n' : 'Auth: 0\n');
+    }
+    if (url.pathname.startsWith('/api/')) return await api(req,res,url);
+    let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/') ? '/index.html' : url.pathname;
+    const target = normalize(join(root, pathname));
+    if (!target.startsWith(root)) return json(res, 403, { error: 'Forbidden' });
+    await stat(target); res.writeHead(200, { 'content-type': mime[extname(target)] || 'application/octet-stream' }); res.end(await readFile(target));
+  } catch (error) { if (error.code === 'ENOENT') return json(res, 404, { error: 'Tidak ditemukan.' }); console.error(error); json(res, 500, { error: 'Kesalahan server.' }); }
+});
 server.listen(config.port, () => console.log(`PerumNet Captive Portal running at ${config.baseUrl}`));
