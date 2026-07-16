@@ -10,7 +10,12 @@ Portal tersedia di `http://localhost:3000`. Saat deployment, gunakan `https://ho
 
 ## Integrasi Ruijie Reyee EG
 
-Konfigurasikan gateway sebagai **Third-party Authentication** dan arahkan `Auth Server URL` ke URL publik aplikasi ini. Tambahkan parameter context gateway seperti `client_mac`, `client_ip`, `ssid`, `orig_url`, dan terutama `login_url`.
+Konfigurasikan gateway sebagai **Third-party Authentication**. Portal dibagi berdasarkan profil jaringan:
+
+- VLAN/SSID akun High Speed `@PERUMNET_WiFi` menggunakan `Auth Server URL` `https://hotspot.perumnet.id`.
+- VLAN/SSID gratis `@PERUMNET_FreeWiFi` dengan QoS Limited menggunakan `Auth Server URL` `https://hotspot.perumnet.id/free`.
+
+Jalur `/free` hanya menampilkan tombol One Click tanpa formulir. Server juga menerima callback WiFiDog dengan prefix `/free/auth/wifidogAuth/...` dan mengembalikan pengguna Limited ke `/free?connected=1` setelah gateway mengonfirmasi token. Tambahkan parameter context gateway seperti `client_mac`, `client_ip`, `ssid`, `orig_url`, dan terutama `login_url`.
 
 Gunakan `REYEE_AUTH_MODE=redirect` saat konfigurasi gateway telah siap. Jika gateway memakai **WiFiDog**, portal membaca `gw_address`, `gw_port`, MAC, dan gateway ID, membuat token unik jangka pendek yang disimpan sebagai hash, lalu mengarahkan browser ke endpoint lokal gateway (`/wifidog/auth`). Gateway mengonfirmasi token melalui `/auth/wifidogAuth/auth/?stage=login`; hanya token yang cocok dengan MAC dan belum kedaluwarsa yang menerima `Auth: 1`. TTL login token dapat diatur melalui `WIFIDOG_TOKEN_TTL_SECONDS` (default 300 detik), durasi High Speed melalui `WIFIDOG_SESSION_HOURS` (default 12 jam), dan durasi Limited melalui `WIFIDOG_LIMITED_SESSION_HOURS` (default 2 jam). Batas bandwidth Limited harus diterapkan sebagai Flow Control pada gateway karena trafik client tidak melewati server portal.
 
