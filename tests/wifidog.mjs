@@ -255,17 +255,54 @@ try {
   const accountCategoryResponse = await fetch(`${baseUrl}/api/admin/clients?category=account`, { headers:{ cookie:adminCookie } });
   const accountCategory = await accountCategoryResponse.json();
   assert(accountCategory.clients.length === 1 && accountCategory.clients[0].email === 'wifidog-test@example.com', 'Filter pengguna terdaftar harus hanya berisi akun yang mengisi data.');
+  const unauthorizedUsersResponse = await fetch(`${baseUrl}/api/admin/users`);
+  assert(unauthorizedUsersResponse.status === 401, 'Database pengguna harus dilindungi session admin.');
+  const adminUsersResponse = await fetch(`${baseUrl}/api/admin/users`, { headers:{ cookie:adminCookie } });
+  const adminUsers = await adminUsersResponse.json();
+  const registeredUser = adminUsers.users.find(user=>user.email==='wifidog-test@example.com');
+  assert(adminUsersResponse.status === 200 && registeredUser && adminUsers.pagination.limit === 10, 'Admin harus dapat membaca database pengguna terdaftar dengan pagination.');
+  assert(registeredUser.device_count === 1 && registeredUser.gateway_name === 'Gateway test-gateway', 'Halaman CRUD harus menyertakan ringkasan perangkat dan gateway terbaru.');
+  const invalidProfileUpdate = await fetch(`${baseUrl}/api/admin/users`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ userId:registeredUser.id,fullName:'WiFiDog Test',email:'bukan-email',phone:'081234567890',address:'Test' })
+  });
+  assert(invalidProfileUpdate.status === 400, 'Admin tidak boleh menyimpan format email yang tidak valid.');
+  const correctedEmail = 'wifidog.corrected@example.com';
+  const updateProfileResponse = await fetch(`${baseUrl}/api/admin/users`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ userId:registeredUser.id,fullName:'WiFiDog Corrected',email:correctedEmail,phone:'0812 3456 7890',address:'Denpasar, Bali' })
+  });
+  const updatedProfile = await updateProfileResponse.json();
+  assert(updateProfileResponse.status === 200 && updatedProfile.user.email === correctedEmail && updatedProfile.user.full_name === 'WiFiDog Corrected', 'Admin harus dapat memperbaiki data diri dan email login.');
+  const correctedEmailLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:correctedEmail,password:newPassword,context:accountContext })
+  });
+  assert(correctedEmailLogin.status === 200, 'Email yang diperbaiki admin harus langsung menjadi credential login baru.');
+  const createProfileResponse = await fetch(`${baseUrl}/api/admin/users`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ fullName:'Pengguna Buatan Admin',email:'admin-created@example.com',phone:'081299999999',address:'Badung',password:'admin-created-password' })
+  });
+  const createdProfile = await createProfileResponse.json();
+  assert(createProfileResponse.status === 201 && createdProfile.user.is_verified === 1, 'Admin harus dapat menambahkan akun terverifikasi dari halaman CRUD.');
+  const deleteProfileResponse = await fetch(`${baseUrl}/api/admin/users`, {
+    method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ userId:createdProfile.user.id })
+  });
+  assert(deleteProfileResponse.status === 200, 'Admin harus dapat menghapus profil yang tidak memiliki perangkat.');
+  const deletedProfileSearch = await fetch(`${baseUrl}/api/admin/users?search=admin-created%40example.com`, { headers:{ cookie:adminCookie } });
+  assert((await deletedProfileSearch.json()).pagination.total === 0, 'Profil yang dihapus tidak boleh kembali dalam database pengguna.');
   const exportResponse = await fetch(`${baseUrl}/api/admin/export.csv`, { headers:{ cookie:adminCookie } });
   const exportedCsv = await exportResponse.text();
   assert(exportResponse.status === 200 && exportResponse.headers.get('content-type').includes('text/csv'), 'Admin harus dapat mengekspor CSV pengguna terdaftar.');
-  assert(exportedCsv.includes('wifidog-test@example.com') && exportedCsv.includes(accountMac) && !exportedCsv.includes(mac), 'CSV harus berisi akun terdaftar dan tidak boleh memasukkan perangkat Free/Limited.');
+  assert(exportedCsv.includes(correctedEmail) && exportedCsv.includes('WiFiDog Corrected') && exportedCsv.includes(accountMac) && !exportedCsv.includes(mac) && !exportedCsv.includes('wifidog-test@example.com'), 'CSV harus langsung memakai hasil koreksi admin dan tidak memasukkan perangkat Free/Limited.');
   const deleteResponse = await fetch(`${baseUrl}/api/admin/clients`, {
     method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ gatewayId:'test-gateway',macAddress:accountMac })
   });
   const deleted = await deleteResponse.json();
   assert(deleteResponse.status === 200 && deleted.deletedAccount && deleted.gatewayAuthorizationRevoked, 'Hapus admin harus menghapus akun dan mencabut otorisasi gateway.');
   const monitoringAfterDelete = await (await fetch(`${baseUrl}/api/admin/monitoring?range=1h`, { headers:{ cookie:adminCookie } })).json();
-  assert(!monitoringAfterDelete.users.some(item=>item.detail==='wifidog-test@example.com'), 'Hapus akun harus ikut menghapus histori monitoring pengguna tersebut.');
+  assert(!monitoringAfterDelete.users.some(item=>item.detail===correctedEmail), 'Hapus akun harus ikut menghapus histori monitoring pengguna tersebut.');
   const revokedCounter = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.30.20&mac=${accountMac}&token=${accountToken}`);
   assert(revokedCounter.body === 'Auth: 0\n', 'Token lama harus ditolak setelah data dihapus admin.');
   const revokedQuery = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.30.20&mac=${accountMac}`);
@@ -275,7 +312,7 @@ try {
   assert(!deletedClientList.clients.some(client=>client.mac_address===accountMac), 'Perangkat yang dicabut tidak boleh muncul kembali hanya karena polling gateway.');
   const removedLogin = await fetch(`${baseUrl}/api/auth/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
-    body:JSON.stringify({ email:'wifidog-test@example.com', password:newPassword, context:accountContext })
+    body:JSON.stringify({ email:correctedEmail, password:newPassword, context:accountContext })
   });
   assert(removedLogin.status === 401, 'Akun yang dihapus tidak boleh dapat login kembali.');
   const deleteGatewayResponse = await fetch(`${baseUrl}/api/admin/gateways`, {

@@ -694,32 +694,19 @@ function deleteClientRecords(gatewayId, macAddress) {
   const client = db.prepare('SELECT user_id FROM clients WHERE gateway_id=? AND mac_address=?').get(scopedGatewayId, mac);
   if (!client) return { error:'Data perangkat tidak ditemukan.', status:404 };
   const userId = client.user_id || null;
-  const relatedClients = userId
-    ? db.prepare('SELECT gateway_id,mac_address FROM clients WHERE user_id=?').all(userId)
-    : [{ gateway_id:scopedGatewayId, mac_address:mac }];
+  if (userId) {
+    const result = deleteUserRecords(userId);
+    return result.error ? result : { ...result, gatewayId:scopedGatewayId, macAddress:mac };
+  }
+  const relatedClients = [{ gateway_id:scopedGatewayId, mac_address:mac }];
   const deviceCount = relatedClients.length;
   db.exec('BEGIN IMMEDIATE');
   try {
-    if (userId) {
-      db.prepare('DELETE FROM telemetry_samples WHERE user_id=?').run(userId);
-      db.prepare('DELETE FROM notifications WHERE user_id=?').run(userId);
-      db.prepare('DELETE FROM captive_sessions WHERE user_id=?').run(userId);
-      db.prepare('DELETE FROM access_logs WHERE user_id=?').run(userId);
-      for (const relatedClient of relatedClients) {
-        db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
-        db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(relatedClient.gateway_id, relatedClient.mac_address);
-        db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
-        db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
-      }
-      db.prepare('DELETE FROM clients WHERE user_id=?').run(userId);
-      db.prepare('DELETE FROM users WHERE id=?').run(userId);
-    } else {
-      db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
-      db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(scopedGatewayId, mac);
-      db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
-      db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
-      db.prepare('DELETE FROM clients WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
-    }
+    db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
+    db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(scopedGatewayId, mac);
+    db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
+    db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
+    db.prepare('DELETE FROM clients WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
     const revokedAt = new Date();
     const expiresAt = new Date(revokedAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
     const revoke = db.prepare('INSERT OR REPLACE INTO revoked_gateway_clients (gateway_id,mac_hash,revoked_at,expires_at) VALUES (?,?,?,?)');
@@ -729,7 +716,38 @@ function deleteClientRecords(gatewayId, macAddress) {
     db.exec('ROLLBACK');
     throw error;
   }
-  return { ok:true, gatewayId:scopedGatewayId, macAddress:mac, deletedAccount:!!userId, deletedDevices:deviceCount, gatewayAuthorizationRevoked:true };
+  return { ok:true, gatewayId:scopedGatewayId, macAddress:mac, deletedAccount:false, deletedDevices:deviceCount, gatewayAuthorizationRevoked:true };
+}
+function deleteUserRecords(userId) {
+  const scopedUserId = String(userId || '').trim();
+  const user = db.prepare('SELECT id,email FROM users WHERE id=?').get(scopedUserId);
+  if (!user) return { error:'Data pengguna tidak ditemukan.', status:404 };
+  const relatedClients = db.prepare('SELECT gateway_id,mac_address FROM clients WHERE user_id=?').all(scopedUserId);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('DELETE FROM telemetry_samples WHERE user_id=?').run(scopedUserId);
+    db.prepare('DELETE FROM notifications WHERE user_id=?').run(scopedUserId);
+    db.prepare('DELETE FROM captive_sessions WHERE user_id=?').run(scopedUserId);
+    db.prepare('DELETE FROM access_logs WHERE user_id=?').run(scopedUserId);
+    for (const client of relatedClients) {
+      db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=? AND mac_address=?').run(client.gateway_id, client.mac_address);
+      db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(client.gateway_id, client.mac_address);
+      db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(client.gateway_id, client.mac_address);
+      db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(client.gateway_id, client.mac_address);
+    }
+    db.prepare('DELETE FROM clients WHERE user_id=?').run(scopedUserId);
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id=?').run(scopedUserId);
+    db.prepare('DELETE FROM users WHERE id=?').run(scopedUserId);
+    const revokedAt = new Date();
+    const expiresAt = new Date(revokedAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    const revoke = db.prepare('INSERT OR REPLACE INTO revoked_gateway_clients (gateway_id,mac_hash,revoked_at,expires_at) VALUES (?,?,?,?)');
+    for (const client of relatedClients) revoke.run(client.gateway_id, hashToken(client.mac_address), revokedAt.toISOString(), expiresAt);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return { ok:true, userId:scopedUserId, email:user.email, deletedAccount:true, deletedDevices:relatedClients.length, gatewayAuthorizationRevoked:relatedClients.length > 0 };
 }
 function deleteAndBlockGateway(gatewayId) {
   const scopedGatewayId = gatewayKey(gatewayId);
@@ -1138,6 +1156,88 @@ async function api(req, res, url) {
     db.prepare('UPDATE portal_network_routes SET portal_mode=?,network_description=?,configured_at=? WHERE gateway_id=? AND network_alias=?')
       .run(portalMode, networkDescription, now, gatewayId, networkAlias);
     return json(res, 200, { network:db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkAlias) });
+  }
+  if (route === '/api/admin/users' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    const search = String(url.searchParams.get('search') || '').trim().toLowerCase().slice(0,120);
+    const verification = ['all','verified','unverified'].includes(url.searchParams.get('verification')) ? url.searchParams.get('verification') : 'all';
+    const allowedLimits = [10,25,50,100];
+    const requestedLimit = Number(url.searchParams.get('limit') || 10);
+    const limit = allowedLimits.includes(requestedLimit) ? requestedLimit : 10;
+    const requestedPage = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1',10) || 1);
+    const conditions = [];
+    const params = [];
+    if (verification === 'verified') conditions.push('u.is_verified=1');
+    else if (verification === 'unverified') conditions.push('u.is_verified=0');
+    if (search) {
+      conditions.push("LOWER(u.full_name || ' ' || u.email || ' ' || u.phone_number || ' ' || u.address) LIKE ?");
+      params.push(`%${search}%`);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM users u ${where}`).get(...params)?.total || 0;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * limit;
+    const users = db.prepare(`SELECT u.id,u.full_name,u.email,u.phone_number,u.address,u.is_verified,u.created_at,
+      (SELECT COUNT(*) FROM clients c WHERE c.user_id=u.id) AS device_count,
+      (SELECT COUNT(*) FROM access_logs a WHERE a.user_id=u.id) AS login_count,
+      (SELECT MAX(c.last_seen_at) FROM clients c WHERE c.user_id=u.id) AS last_seen_at,
+      (SELECT g.name FROM clients c JOIN gateways g ON g.id=c.gateway_id WHERE c.user_id=u.id ORDER BY c.last_seen_at DESC LIMIT 1) AS gateway_name,
+      (SELECT p.name FROM clients c JOIN gateways g ON g.id=c.gateway_id JOIN projects p ON p.id=g.project_id WHERE c.user_id=u.id ORDER BY c.last_seen_at DESC LIMIT 1) AS project_name
+      FROM users u ${where} ORDER BY u.created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset);
+    const stats = db.prepare(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN is_verified=1 THEN 1 ELSE 0 END) AS verified,
+      SUM(CASE WHEN is_verified=0 THEN 1 ELSE 0 END) AS unverified FROM users`).get();
+    return json(res, 200, {
+      users,
+      stats:{ total:stats.total || 0, verified:stats.verified || 0, unverified:stats.unverified || 0 },
+      pagination:{ page,limit,total,totalPages }
+    });
+  }
+  if (route === '/api/admin/users' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const fullName = String(payload.fullName || '').trim().replace(/\s+/g,' ').slice(0,120);
+    const email = String(payload.email || '').trim().toLowerCase().slice(0,254);
+    const phone = String(payload.phone || '').trim().replace(/\s+/g,' ').slice(0,40);
+    const address = String(payload.address || '').trim().replace(/\s+/g,' ').slice(0,500);
+    const password = String(payload.password || '');
+    if (fullName.length < 2) return json(res, 400, { error:'Nama lengkap minimal 2 karakter.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error:'Format email tidak valid.' });
+    if (phone.length < 6) return json(res, 400, { error:'Nomor HP minimal 6 karakter.' });
+    if (address.length < 3) return json(res, 400, { error:'Alamat minimal 3 karakter.' });
+    if (password.length < 8) return json(res, 400, { error:'Kata sandi minimal 8 karakter.' });
+    if (db.prepare('SELECT id FROM users WHERE email=?').get(email)) return json(res, 409, { error:'Email sudah digunakan pengguna lain.' });
+    const userId = id();
+    db.prepare('INSERT INTO users (id,full_name,email,phone_number,address,password_hash,is_verified,verification_token,created_at) VALUES (?,?,?,?,?,?,1,NULL,?)')
+      .run(userId,fullName,email,phone,address,hashPassword(password),new Date().toISOString());
+    return json(res, 201, { user:db.prepare('SELECT id,full_name,email,phone_number,address,is_verified,created_at FROM users WHERE id=?').get(userId) });
+  }
+  if (route === '/api/admin/users' && req.method === 'PATCH') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const userId = String(payload.userId || '').trim();
+    const current = db.prepare('SELECT id,email FROM users WHERE id=?').get(userId);
+    if (!current) return json(res, 404, { error:'Data pengguna tidak ditemukan.' });
+    const fullName = String(payload.fullName || '').trim().replace(/\s+/g,' ').slice(0,120);
+    const email = String(payload.email || '').trim().toLowerCase().slice(0,254);
+    const phone = String(payload.phone || '').trim().replace(/\s+/g,' ').slice(0,40);
+    const address = String(payload.address || '').trim().replace(/\s+/g,' ').slice(0,500);
+    if (fullName.length < 2) return json(res, 400, { error:'Nama lengkap minimal 2 karakter.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error:'Format email tidak valid.' });
+    if (phone.length < 6) return json(res, 400, { error:'Nomor HP minimal 6 karakter.' });
+    if (address.length < 3) return json(res, 400, { error:'Alamat minimal 3 karakter.' });
+    const duplicate = db.prepare('SELECT id FROM users WHERE email=? AND id<>?').get(email,userId);
+    if (duplicate) return json(res, 409, { error:'Email sudah digunakan pengguna lain.' });
+    db.prepare('UPDATE users SET full_name=?,email=?,phone_number=?,address=? WHERE id=?').run(fullName,email,phone,address,userId);
+    return json(res, 200, { user:db.prepare('SELECT id,full_name,email,phone_number,address,is_verified,created_at FROM users WHERE id=?').get(userId) });
+  }
+  if (route === '/api/admin/users' && req.method === 'DELETE') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const result = deleteUserRecords(payload.userId);
+    if (result.error) return json(res, result.status, { error:result.error });
+    return json(res, 200, result);
   }
   if (route === '/api/admin/export.csv' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
