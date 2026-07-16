@@ -23,6 +23,8 @@ Dashboard membuat notifikasi ketika gateway mengonfirmasi login, serta ketika cl
 
 Dashboard admin membaca callback WiFiDog `stage=counters` (`incoming` dan `outgoing`) untuk menampilkan bandwidth per interval, durasi login, serta total pemakaian data per perangkat. Tampilan diperbarui setiap 5 detik; angka berubah mengikuti interval counter yang dikirim firmware Reyee, bukan trafik yang melewati VPS. Bila gateway belum mengirim counter, dashboard menampilkan status **Menunggu telemetry**.
 
+Setiap callback counter juga disimpan sebagai histori selama 30 hari. Panel grafik admin menyediakan periode 1 jam, 6 jam, 24 jam, dan 7 hari untuk melihat bandwidth gabungan, distribusi penggunaan setiap SSID, serta pengguna dengan trafik tertinggi. Semua grafik mengikuti filter project/gateway yang aktif dan diperbarui otomatis setiap 10 detik.
+
 Daftar perangkat memakai pagination server dengan 10 baris sebagai default dan pilihan 25, 50, atau 100 baris. Filter kategori memisahkan **Pengguna Terdaftar**, **Free / Limited**, dan **Belum Login**. Ekspor CSV dibuat langsung dari data akun terdaftar; perangkat Free/Limited dan perangkat yang belum login tidak pernah dimasukkan ke file.
 
 ## Multi-project dan multi-gateway

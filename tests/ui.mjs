@@ -27,6 +27,11 @@ assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel
 assert.match(html, /id="category-filter"/, 'Dashboard harus memisahkan kategori pengguna terdaftar, Free, dan belum login.');
 assert.match(html, /id="page-size"[^>]*><option value="10" selected>10<\/option><option value="25">25<\/option><option value="50">50<\/option><option value="100">100<\/option>/, 'Tabel harus menyediakan pilihan 10 sampai 100 data per halaman.');
 assert.match(html, /id="monitoring-status"/, 'Dashboard harus menampilkan status monitoring real-time.');
+assert.match(html, /id="analytics-panel"/, 'Dashboard harus menampilkan panel grafik di atas tabel perangkat.');
+assert.match(html, /id="global-traffic-chart"/, 'Dashboard harus menyediakan grafik bandwidth global gabungan.');
+assert.match(html, /id="ssid-usage-chart"/, 'Dashboard harus menyediakan grafik penggunaan setiap SSID.');
+assert.match(html, /id="user-usage-chart"/, 'Dashboard harus menyediakan grafik penggunaan per pengguna.');
+assert.match(html, /id="monitoring-range"[\s\S]*data-range="1h"[\s\S]*data-range="7d"/, 'Grafik harus menyediakan pilihan periode 1 jam hingga 7 hari.');
 assert.match(html, /Bandwidth Saat Ini/, 'Tabel admin harus menampilkan bandwidth setiap pengguna.');
 assert.match(html, /Durasi Login/, 'Tabel admin harus menampilkan durasi login.');
 assert.match(html, /Data Terpakai/, 'Tabel admin harus menampilkan total penggunaan data.');
@@ -59,6 +64,10 @@ assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifik
 assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
 assert.match(app, /setInterval\(\(\)=>\{[\s\S]*loadAdminLeads\(\{ silent:true \}\)[\s\S]*\},5000\)/, 'Monitoring client harus diperbarui otomatis setiap lima detik.');
 assert.match(app, /\/api\/admin\/export\.csv/, 'Ekspor CSV harus dibuat server agar perangkat Free tidak ikut terunduh.');
+assert.match(app, /\/api\/admin\/monitoring/, 'Dashboard harus membaca agregasi monitoring historis dari server.');
+assert.match(app, /renderGlobalTrafficChart/, 'UI harus merender grafik gabungan tanpa library eksternal.');
+assert.match(app, /renderSsidUsageChart/, 'UI harus merender distribusi per SSID.');
+assert.match(app, /renderUserUsageChart/, 'UI harus merender penggunaan per pengguna.');
 assert.match(app, /category:'all'.*totalPages:1/, 'UI harus menyimpan state pagination dan kategori tabel.');
 assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus client harus dibatasi pada gateway yang tepat.');
 assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
@@ -76,5 +85,7 @@ const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:b
 const finalMobileTableReset = css.lastIndexOf('body.admin-view table{min-width:0}');
 assert.ok(Math.max(mobileGatewayTableReset,finalMobileTableReset) > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel monitoring.');
 assert.match(css, /body\.admin-view \.stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'Statistik mobile harus tampil tanpa carousel horizontal yang terpotong.');
+assert.match(css, /\.analytics-grid/, 'Panel monitoring harus memiliki layout grafik responsif.');
+assert.match(css, /body\.admin-view \.analytics-card\{width:100%;min-width:0;max-width:100%/, 'Panel grafik mobile harus dibatasi pada lebar viewport.');
 
 console.log('Responsive UI contract: PASS');

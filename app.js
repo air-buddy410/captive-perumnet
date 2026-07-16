@@ -17,6 +17,7 @@ const destinationUrl = 'https://perumnet.id';
 let redirectTimer;
 let notificationTimer;
 let monitoringTimer;
+let analyticsTimer;
 let searchTimer;
 async function api(path, payload, method) { const requestMethod = method || (payload ? 'POST' : 'GET'); const hasBody = payload !== undefined && requestMethod !== 'GET'; const response = await fetch(path, { method:requestMethod, credentials:'same-origin', headers:hasBody ? { 'content-type':'application/json' } : undefined, body:hasBody ? JSON.stringify(payload) : undefined }); const raw = await response.text(); let result; try { result = JSON.parse(raw); } catch { throw new Error(response.ok ? 'Respons server portal tidak valid.' : `Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); } if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
@@ -53,6 +54,7 @@ const leads = [];
 let networkCatalog = { projects:[], gateways:[] };
 const adminScope = { projectId:'', gatewayId:'' };
 const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
+const adminMonitoring = { range:'24h', loading:false };
 let leadsLoading = false;
 function scopeQuery(extra={}) {
   const params = new URLSearchParams();
@@ -125,6 +127,10 @@ function startMonitoringPolling() {
   monitoringTimer=setInterval(()=>{
     if(document.visibilityState==='visible' && screens.dashboard.classList.contains('active') && $('#leads-tab').classList.contains('active')) loadAdminLeads({ silent:true });
   },5000);
+  clearInterval(analyticsTimer);
+  analyticsTimer=setInterval(()=>{
+    if(document.visibilityState==='visible' && screens.dashboard.classList.contains('active') && $('#leads-tab').classList.contains('active')) loadAdminMonitoring({ silent:true });
+  },10000);
 }
 const formatBytes = value => {
   const bytes = Math.max(0,Number(value || 0));
@@ -145,6 +151,78 @@ const formatDuration = value => {
   if(minutes) return `${minutes}m ${remaining}d`;
   return `${remaining} detik`;
 };
+function chartTimeLabel(value) {
+  const date=new Date(value);
+  if(adminMonitoring.range==='7d') return date.toLocaleDateString('id-ID',{ day:'numeric',month:'short' });
+  return date.toLocaleTimeString('id-ID',{ hour:'2-digit',minute:'2-digit' });
+}
+function niceChartMaximum(value) {
+  const maximum=Math.max(1,Number(value || 0)),magnitude=10 ** Math.floor(Math.log10(maximum)),normalized=maximum/magnitude;
+  return (normalized<=1?1:normalized<=2?2:normalized<=5?5:10)*magnitude;
+}
+function renderGlobalTrafficChart(timeline=[],hasHistory=false) {
+  const container=$('#global-traffic-chart');
+  if(!hasHistory || !timeline.length){ container.innerHTML='<div class="chart-empty">Menunggu histori counter dari gateway. Grafik mulai terisi otomatis ketika pengguna aktif memakai internet.</div>'; return; }
+  const width=760,height=255,padding={ top:18,right:14,bottom:31,left:55 },chartWidth=width-padding.left-padding.right,chartHeight=height-padding.top-padding.bottom;
+  const maximum=niceChartMaximum(Math.max(...timeline.flatMap(point=>[Number(point.incoming_bps||0),Number(point.outgoing_bps||0)])));
+  const x=index=>padding.left+(timeline.length===1?chartWidth/2:(index/(timeline.length-1))*chartWidth);
+  const y=value=>padding.top+chartHeight-(Math.max(0,Number(value||0))/maximum)*chartHeight;
+  const pathFor=key=>timeline.map((point,index)=>`${index?'L':'M'} ${x(index).toFixed(2)} ${y(point[key]).toFixed(2)}`).join(' ');
+  const downloadPath=pathFor('incoming_bps'),uploadPath=pathFor('outgoing_bps');
+  const downloadArea=`${downloadPath} L ${x(timeline.length-1).toFixed(2)} ${(padding.top+chartHeight).toFixed(2)} L ${x(0).toFixed(2)} ${(padding.top+chartHeight).toFixed(2)} Z`;
+  const grid=[0,.25,.5,.75,1].map(ratio=>{ const lineY=padding.top+chartHeight-ratio*chartHeight; return `<line class="chart-grid" x1="${padding.left}" y1="${lineY}" x2="${width-padding.right}" y2="${lineY}"/><text class="chart-axis-label" x="${padding.left-8}" y="${lineY+3}" text-anchor="end">${escapeHtml(formatBitrate(maximum*ratio))}</text>`; }).join('');
+  const labelIndexes=[0,Math.round((timeline.length-1)/3),Math.round((timeline.length-1)*2/3),timeline.length-1].filter((value,index,array)=>array.indexOf(value)===index);
+  const xLabels=labelIndexes.map(index=>`<text class="chart-axis-label" x="${x(index)}" y="${height-8}" text-anchor="${index===0?'start':index===timeline.length-1?'end':'middle'}">${escapeHtml(chartTimeLabel(timeline[index].at))}</text>`).join('');
+  const pointStep=Math.max(1,Math.ceil(timeline.length/12));
+  const points=timeline.map((point,index)=>index%pointStep===0||index===timeline.length-1 ? `<circle class="chart-point download" cx="${x(index)}" cy="${y(point.incoming_bps)}" r="3"><title>${escapeHtml(`${chartTimeLabel(point.at)} · Download ${formatBitrate(point.incoming_bps)}`)}</title></circle><circle class="chart-point upload" cx="${x(index)}" cy="${y(point.outgoing_bps)}" r="3"><title>${escapeHtml(`${chartTimeLabel(point.at)} · Upload ${formatBitrate(point.outgoing_bps)}`)}</title></circle>`:'').join('');
+  container.innerHTML=`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Grafik bandwidth gabungan download dan upload"><defs><linearGradient id="traffic-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#08a69c" stop-opacity=".24"/><stop offset="1" stop-color="#08a69c" stop-opacity="0"/></linearGradient></defs>${grid}${xLabels}<path class="chart-area" d="${downloadArea}"/><path class="download-line" d="${downloadPath}"/><path class="upload-line" d="${uploadPath}"/>${points}</svg>`;
+}
+function chartBarWidths(item) {
+  const incoming=Number(item.incoming_bytes||0),outgoing=Number(item.outgoing_bytes||0),historical=incoming+outgoing;
+  const liveIncoming=Number(item.incoming_bps||0),liveOutgoing=Number(item.outgoing_bps||0),live=liveIncoming+liveOutgoing;
+  const total=historical||live;
+  return { metric:total,incomingPercent:total?((historical?incoming:liveIncoming)/total)*100:0,outgoingPercent:total?((historical?outgoing:liveOutgoing)/total)*100:0 };
+}
+function renderSsidUsageChart(rows=[]) {
+  const container=$('#ssid-usage-chart');
+  if(!rows.length){ container.innerHTML='<div class="chart-empty compact">Belum ada SSID pada jaringan yang dipilih.</div>'; return; }
+  const metrics=rows.map(chartBarWidths),maximum=Math.max(1,...metrics.map(item=>item.metric));
+  container.innerHTML=rows.map((row,index)=>{ const widths=metrics[index],barWidth=widths.metric?Math.max(2,(widths.metric/maximum)*100):0,live=Number(row.incoming_bps||0)+Number(row.outgoing_bps||0); return `<div class="bar-chart-row"><div class="bar-chart-meta"><div class="bar-chart-identity"><b>${escapeHtml(row.ssid)}</b><small>${escapeHtml(`${row.active_users||0} pengguna aktif`)}</small></div><div class="bar-chart-value"><b>${escapeHtml(formatBytes(row.total_bytes))}</b><small>${escapeHtml(`Live ${formatBitrate(live)}`)}</small></div></div><div class="bar-track" title="${escapeHtml(`${row.ssid}: ${formatBytes(row.total_bytes)}`)}"><div class="bar-fill" style="width:${barWidth.toFixed(2)}%"><span class="download" style="width:${widths.incomingPercent.toFixed(2)}%"></span><span class="upload" style="width:${widths.outgoingPercent.toFixed(2)}%"></span></div></div></div>`; }).join('');
+}
+function renderUserUsageChart(rows=[]) {
+  const container=$('#user-usage-chart');
+  if(!rows.length){ container.innerHTML='<div class="chart-empty compact">Belum ada pemakaian pengguna pada periode ini.</div>'; return; }
+  const metrics=rows.map(chartBarWidths),maximum=Math.max(1,...metrics.map(item=>item.metric));
+  container.innerHTML=rows.map((row,index)=>{ const widths=metrics[index],barWidth=widths.metric?Math.max(2,(widths.metric/maximum)*100):0,live=Number(row.incoming_bps||0)+Number(row.outgoing_bps||0),access=row.access_type==='limited'?'Free':'Akun'; return `<div class="bar-chart-row"><div class="bar-chart-meta"><div class="bar-chart-identity"><b>${escapeHtml(row.name)}<span class="user-access ${row.access_type==='limited'?'limited':''}">${access}</span></b><small>${escapeHtml(`${row.detail} · ${row.ssid}`)}</small></div><div class="bar-chart-value"><b>${escapeHtml(formatBytes(row.total_bytes))}</b><small>${escapeHtml(`${row.active?'Aktif':'Offline'} · ${formatBitrate(live)} · ${formatDuration(row.duration_seconds)}`)}</small></div></div><div class="bar-track" title="${escapeHtml(`${row.name}: ${formatBytes(row.total_bytes)}`)}"><div class="bar-fill user" style="width:${barWidth.toFixed(2)}%"></div></div></div>`; }).join('');
+}
+function renderAdminMonitoring(result) {
+  const summary=result.summary||{},combined=Number(summary.incoming_bps||0)+Number(summary.outgoing_bps||0);
+  $('#monitoring-live-rate').textContent=formatBitrate(combined);
+  $('#monitoring-live-split').textContent=`↓ ${formatBitrate(summary.incoming_bps)} · ↑ ${formatBitrate(summary.outgoing_bps)}`;
+  $('#monitoring-usage-label').textContent=`Pemakaian ${result.range_label}`;
+  $('#monitoring-total-usage').textContent=formatBytes(summary.total_bytes);
+  $('#monitoring-usage-split').textContent=`↓ ${formatBytes(summary.incoming_bytes)} · ↑ ${formatBytes(summary.outgoing_bytes)}`;
+  $('#monitoring-active-users').textContent=summary.active_users||0;
+  $('#monitoring-active-devices').textContent=`${summary.active_devices||0} perangkat terhubung`;
+  $('#monitoring-ssid-total').textContent=summary.ssid_count||0;
+  $('#monitoring-tracked-devices').textContent=`${summary.tracked_devices||0} perangkat mengirim counter`;
+  $('#ssid-period-label').textContent=result.range_label;
+  $('#user-period-label').textContent=`Top 12 · ${result.range_label}`;
+  const source=$('#monitoring-source-status');
+  source.textContent=result.has_history ? `${result.sample_count.toLocaleString('id-ID')} sampel counter · histori disimpan ${result.retention_days} hari` : 'Grafik akan terisi setelah gateway mengirim callback counter.';
+  source.classList.toggle('has-history',!!result.has_history);
+  $('#monitoring-updated-at').textContent=`Diperbarui ${new Date(result.generated_at).toLocaleTimeString('id-ID',{ hour:'2-digit',minute:'2-digit',second:'2-digit' })}`;
+  renderGlobalTrafficChart(result.timeline,result.has_history);
+  renderSsidUsageChart(result.ssids);
+  renderUserUsageChart(result.users);
+}
+async function loadAdminMonitoring({ silent=false }={}) {
+  if(!isAdminView || adminMonitoring.loading) return;
+  adminMonitoring.loading=true;
+  try { const result=await api(`/api/admin/monitoring${scopeQuery({ range:adminMonitoring.range })}`); renderAdminMonitoring(result); updateMonitoringStatus('live'); }
+  catch(error){ updateMonitoringStatus('error'); if(!silent) throw error; }
+  finally { adminMonitoring.loading=false; }
+}
 function updateMonitoringStatus(state='live') {
   const status=$('#monitoring-status'); if(!status) return;
   status.classList.toggle('error',state==='error');
@@ -219,7 +297,7 @@ async function loadAdminNetwork() {
 }
 renderLeads();
 loadPortalSettings();
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadNotifications()]); show('dashboard'); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); show('dashboard'); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
@@ -237,24 +315,25 @@ $('#account-status-action').onclick = () => location.assign(destinationUrl);
 $('#resend-verification').onclick = async e => { const feedback=$('#verification-status'); if (!pendingVerificationEmail) { feedback.textContent='Kembali ke formulir lalu masukkan ulang data pendaftaran.'; return; } e.currentTarget.disabled=true; feedback.textContent='Mengirim ulang email…'; try { const result=await api('/api/auth/resend',{ email:pendingVerificationEmail }); feedback.textContent=result.message; } catch(error) { feedback.textContent=error.message; } finally { e.currentTarget.disabled=false; } }; $('#back-from-verify').onclick = showAccessChoice;
 $('#browse-button').onclick = () => { clearInterval(redirectTimer); location.assign(destinationUrl); };
 $('#admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#access-admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#back-portal').onclick = () => location.assign('/');
-$('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); clearInterval(monitoringTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
+$('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
 function setSidebar(open) { document.body.classList.toggle('sidebar-open',open); $('#sidebar-toggle').setAttribute('aria-expanded',String(open)); }
 $('#sidebar-toggle').onclick = () => setSidebar(!document.body.classList.contains('sidebar-open')); $('#sidebar-backdrop').onclick = () => setSidebar(false);
 $('#notification-toggle').onclick = event => { event.stopPropagation(); setNotificationPanel(!$('#notification-panel').classList.contains('open')); };
 $('#notification-panel').onclick = event => event.stopPropagation();
 $('#notification-read-all').onclick = async () => { try { await api(`/api/admin/notifications/read${scopeQuery()}`, {}); await loadNotifications(); } catch (error) { alert(error.message); } };
 document.addEventListener('click', () => setNotificationPanel(false));
-document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); if(tab==='leads') loadAdminLeads({ silent:true }); setNotificationPanel(false); setSidebar(false); });
+document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true })]); setNotificationPanel(false); setSidebar(false); });
 document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
-$('#scope-project').addEventListener('change',async event=>{ adminScope.projectId=event.target.value; adminScope.gatewayId=''; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
-$('#scope-gateway').addEventListener('change',async event=>{ adminScope.gatewayId=event.target.value; const gateway=selectedGateway(); if(gateway) adminScope.projectId=gateway.project_id; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
+$('#scope-project').addEventListener('change',async event=>{ adminScope.projectId=event.target.value; adminScope.gatewayId=''; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); } catch(error){ alert(error.message); } });
+$('#scope-gateway').addEventListener('change',async event=>{ adminScope.gatewayId=event.target.value; const gateway=selectedGateway(); if(gateway) adminScope.projectId=gateway.project_id; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); } catch(error){ alert(error.message); } });
 $('#project-form').addEventListener('submit',async event=>{ event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button'),feedback=$('#project-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent=''; try { await api('/api/admin/projects',{ name:data.get('name'),location:data.get('location') }); form.reset(); feedback.textContent='Project berhasil ditambahkan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
 $('#gateway-list').addEventListener('submit',async event=>{ const form=event.target.closest('.gateway-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.gateway-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent='Menyimpan…'; try { await api('/api/admin/gateways',{ gatewayId:form.dataset.gatewayId,projectId:data.get('projectId'),name:data.get('name'),location:data.get('location'),model:data.get('model') }); feedback.textContent='Identitas gateway tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); await loadAdminLeads(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
 $('#search-input').addEventListener('input', event => { clearTimeout(searchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; searchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
 $('#category-filter').addEventListener('click',event=>{ const button=event.target.closest('[data-category]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#category-filter [data-category]').forEach(item=>item.classList.toggle('active',item===button)); adminTable.category=button.dataset.category; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
+$('#monitoring-range').addEventListener('click',event=>{ const button=event.target.closest('[data-range]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#monitoring-range [data-range]').forEach(item=>item.classList.toggle('active',item===button)); adminMonitoring.range=button.dataset.range; loadAdminMonitoring().catch(error=>alert(error.message)); });
 $('#page-size').addEventListener('change',event=>{ adminTable.limit=Number(event.target.value)||10; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
 $('#page-prev').onclick=()=>{ if(adminTable.page<=1) return; adminTable.page-=1; loadAdminLeads().catch(error=>alert(error.message)); };
 $('#page-next').onclick=()=>{ if(adminTable.page>=adminTable.totalPages) return; adminTable.page+=1; loadAdminLeads().catch(error=>alert(error.message)); };
-$('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, dan riwayat akses akan dihapus.' : `Perangkat dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
+$('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, histori monitoring, dan riwayat akses akan dihapus.' : `Perangkat, histori monitoring, dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
 $('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
 $('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const accountSsid=$('#setting-account-ssid').value.trim() || '@PERUMNET_WiFi', freeSsid=$('#setting-free-ssid').value.trim() || '@PERUMNET_FreeWiFi', title=$('#setting-title').value || 'Masuk ke internet cepat.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { accountSsid,freeSsid,welcomeTitle:title,welcomeText:copy,termsText:terms,limitedBandwidthKbps:bandwidth }); portalSettings={ ...portalSettings,account_ssid:accountSsid,free_ssid:freeSsid,default_ssid:accountSsid,welcome_title:title,welcome_text:copy,terms_text:terms,limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || accountSsid); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#account-profile-ssid').textContent=accountSsid; $('#free-profile-ssid').textContent=freeSsid; $('#preview-account-ssid').textContent=accountSsid; $('#preview-free-ssid').textContent=freeSsid; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });
