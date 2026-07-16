@@ -56,6 +56,8 @@ const clientColumns = migrated.prepare('PRAGMA table_info(clients)').all();
 const primaryKey = clientColumns.filter(column=>column.pk>0);
 assert(primaryKey.length===2 && primaryKey.some(column=>column.name==='gateway_id') && primaryKey.some(column=>column.name==='mac_address'),'Primary key client harus menjadi gabungan gateway dan MAC.');
 assert(['session_started_at','last_counter_at','incoming_bytes','outgoing_bytes','incoming_bps','outgoing_bps'].every(name=>clientColumns.some(column=>column.name===name)),'Migrasi harus menambahkan kolom telemetry WiFiDog tanpa menghilangkan client lama.');
+const telemetryColumns = migrated.prepare('PRAGMA table_info(telemetry_samples)').all();
+assert(['gateway_id','mac_address','user_id','ssid','sampled_at','incoming_delta','outgoing_delta','incoming_bps','outgoing_bps'].every(name=>telemetryColumns.some(column=>column.name===name)),'Migrasi harus menambahkan histori telemetry untuk grafik tanpa mengubah data client lama.');
 migrated.close();
 await rm(dataDir,{recursive:true,force:true});
 console.log('Legacy multi-gateway migration: PASS');

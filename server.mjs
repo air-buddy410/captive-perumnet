@@ -64,6 +64,18 @@ db.exec(`
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_captive_sessions_mac ON captive_sessions(mac_address);
+  CREATE TABLE IF NOT EXISTS telemetry_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    gateway_id TEXT NOT NULL, mac_address TEXT NOT NULL,
+    user_id TEXT, access_type TEXT, ssid TEXT,
+    sampled_at TEXT NOT NULL,
+    incoming_bytes INTEGER NOT NULL DEFAULT 0, outgoing_bytes INTEGER NOT NULL DEFAULT 0,
+    incoming_delta INTEGER NOT NULL DEFAULT 0, outgoing_delta INTEGER NOT NULL DEFAULT 0,
+    incoming_bps REAL, outgoing_bps REAL
+  );
+  CREATE INDEX IF NOT EXISTS idx_telemetry_sampled_at ON telemetry_samples(sampled_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_telemetry_gateway_time ON telemetry_samples(gateway_id,sampled_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_telemetry_user_time ON telemetry_samples(user_id,sampled_at DESC);
   CREATE TABLE IF NOT EXISTS revoked_clients (
     mac_hash TEXT PRIMARY KEY, revoked_at TEXT NOT NULL, expires_at TEXT NOT NULL
   );
@@ -313,6 +325,8 @@ function wifiDogCounter(searchParams, names) {
   return null;
 }
 
+let nextTelemetryPruneAt = 0;
+
 // WiFiDog sends cumulative traffic counters with the login/counters callback.
 // Store both totals and the rate between the two most recent callbacks so the
 // dashboard can monitor actual gateway traffic without routing it via the VPS.
@@ -337,6 +351,19 @@ function recordWifiDogTelemetry(session, url, now = new Date()) {
   db.prepare(`UPDATE clients SET last_seen_at=?,last_counter_at=?,incoming_bytes=?,outgoing_bytes=?,incoming_bps=?,outgoing_bps=?
     WHERE gateway_id=? AND mac_address=?`)
     .run(nowIso, nowIso, nextIncoming, nextOutgoing, incomingBps, outgoingBps, gatewayId, session.mac_address);
+  const client = db.prepare('SELECT user_id,access_type,ssid FROM clients WHERE gateway_id=? AND mac_address=?').get(gatewayId, session.mac_address);
+  const settings = db.prepare('SELECT account_ssid,free_ssid FROM portal_settings WHERE id=1').get() || {};
+  const accessType = client?.access_type || session.access_type || null;
+  const ssid = ssidFromGateway({ ssid:client?.ssid }) || (accessType === 'limited' ? settings.free_ssid : settings.account_ssid) || null;
+  db.prepare(`INSERT INTO telemetry_samples
+    (gateway_id,mac_address,user_id,access_type,ssid,sampled_at,incoming_bytes,outgoing_bytes,incoming_delta,outgoing_delta,incoming_bps,outgoing_bps)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(gatewayId, session.mac_address, client?.user_id || session.user_id || null, accessType, ssid, nowIso,
+      nextIncoming, nextOutgoing, incomingDelta, outgoingDelta, incomingBps, outgoingBps);
+  if (now.getTime() >= nextTelemetryPruneAt) {
+    db.prepare('DELETE FROM telemetry_samples WHERE sampled_at<?').run(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString());
+    nextTelemetryPruneAt = now.getTime() + 60 * 60 * 1000;
+  }
   return true;
 }
 function sweepOfflineClients(now = new Date()) {
@@ -501,10 +528,12 @@ function deleteClientRecords(gatewayId, macAddress) {
   db.exec('BEGIN IMMEDIATE');
   try {
     if (userId) {
+      db.prepare('DELETE FROM telemetry_samples WHERE user_id=?').run(userId);
       db.prepare('DELETE FROM notifications WHERE user_id=?').run(userId);
       db.prepare('DELETE FROM captive_sessions WHERE user_id=?').run(userId);
       db.prepare('DELETE FROM access_logs WHERE user_id=?').run(userId);
       for (const relatedClient of relatedClients) {
+        db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
         db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(relatedClient.gateway_id, relatedClient.mac_address);
         db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
         db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(relatedClient.gateway_id, relatedClient.mac_address);
@@ -512,6 +541,7 @@ function deleteClientRecords(gatewayId, macAddress) {
       db.prepare('DELETE FROM clients WHERE user_id=?').run(userId);
       db.prepare('DELETE FROM users WHERE id=?').run(userId);
     } else {
+      db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
       db.prepare('DELETE FROM notifications WHERE gateway_id=? AND client_mac=?').run(scopedGatewayId, mac);
       db.prepare('DELETE FROM captive_sessions WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
       db.prepare('DELETE FROM access_logs WHERE gateway_id=? AND mac_address=?').run(scopedGatewayId, mac);
@@ -555,6 +585,138 @@ async function sendPasswordReset(email, token) {
     html:`<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px"><h2 style="color:#008d85">Reset kata sandi PerumNet</h2><p>Klik tombol berikut untuk membuat kata sandi baru. Tautan ini berlaku selama ${config.passwordResetMinutes} menit dan hanya dapat digunakan satu kali.</p><p><a href="${link}" style="display:inline-block;padding:12px 20px;color:#fff;background:#04a99f;border-radius:8px;text-decoration:none;font-weight:700">Buat Kata Sandi Baru</a></p><p style="color:#71828b;font-size:12px">Jika Anda tidak meminta reset kata sandi, abaikan email ini.</p></div>`
   });
   return link;
+}
+
+const monitoringRanges = Object.freeze({
+  '1h':{ hours:1, bucketMinutes:5, label:'1 jam terakhir' },
+  '6h':{ hours:6, bucketMinutes:15, label:'6 jam terakhir' },
+  '24h':{ hours:24, bucketMinutes:60, label:'24 jam terakhir' },
+  '7d':{ hours:24 * 7, bucketMinutes:6 * 60, label:'7 hari terakhir' }
+});
+function monitoringData(url) {
+  const range = Object.hasOwn(monitoringRanges, url.searchParams.get('range')) ? url.searchParams.get('range') : '24h';
+  const rangeConfig = monitoringRanges[range];
+  const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
+  const projectId = String(url.searchParams.get('projectId') || '').trim();
+  const now = new Date();
+  const startAt = new Date(now.getTime() - rangeConfig.hours * 60 * 60 * 1000);
+  const sampleConditions = ['s.sampled_at>=?'];
+  const sampleParams = [startAt.toISOString()];
+  const clientConditions = [];
+  const clientParams = [];
+  if (gatewayId) {
+    sampleConditions.push('s.gateway_id=?'); sampleParams.push(gatewayId);
+    clientConditions.push('c.gateway_id=?'); clientParams.push(gatewayId);
+  } else if (projectId) {
+    sampleConditions.push('g.project_id=?'); sampleParams.push(projectId);
+    clientConditions.push('g.project_id=?'); clientParams.push(projectId);
+  }
+  const bucketMs = rangeConfig.bucketMinutes * 60 * 1000;
+  const bucketSeconds = Math.floor(bucketMs / 1000);
+  const sampleWhere = sampleConditions.join(' AND ');
+  const timelineRows = db.prepare(`WITH per_device AS (
+    SELECT CAST(unixepoch(s.sampled_at)/? AS INTEGER)*? AS bucket_at,s.gateway_id,s.mac_address,
+      AVG(CASE WHEN s.incoming_bps IS NOT NULL THEN s.incoming_bps END) AS incoming_bps,
+      AVG(CASE WHEN s.outgoing_bps IS NOT NULL THEN s.outgoing_bps END) AS outgoing_bps,
+      SUM(s.incoming_delta) AS incoming_bytes,SUM(s.outgoing_delta) AS outgoing_bytes
+    FROM telemetry_samples s JOIN gateways g ON g.id=s.gateway_id
+    WHERE ${sampleWhere} GROUP BY bucket_at,s.gateway_id,s.mac_address
+  ) SELECT bucket_at,ROUND(COALESCE(SUM(incoming_bps),0)) AS incoming_bps,
+    ROUND(COALESCE(SUM(outgoing_bps),0)) AS outgoing_bps,SUM(incoming_bytes) AS incoming_bytes,SUM(outgoing_bytes) AS outgoing_bytes
+    FROM per_device GROUP BY bucket_at ORDER BY bucket_at`).all(bucketSeconds,bucketSeconds,...sampleParams);
+  const historicalSsids = db.prepare(`SELECT s.ssid,s.access_type,SUM(s.incoming_delta) AS incoming_bytes,SUM(s.outgoing_delta) AS outgoing_bytes
+    FROM telemetry_samples s JOIN gateways g ON g.id=s.gateway_id WHERE ${sampleWhere} GROUP BY s.ssid,s.access_type`).all(...sampleParams);
+  const historicalUsers = db.prepare(`SELECT CASE WHEN s.user_id IS NOT NULL THEN 'user:'||s.user_id ELSE 'device:'||s.gateway_id||'|'||s.mac_address END AS identity_key,
+    MAX(s.user_id) AS user_id,MAX(s.gateway_id) AS gateway_id,MAX(s.mac_address) AS mac_address,MAX(s.access_type) AS access_type,
+    MAX(s.ssid) AS ssid,MAX(u.full_name) AS full_name,MAX(u.email) AS email,
+    SUM(s.incoming_delta) AS incoming_bytes,SUM(s.outgoing_delta) AS outgoing_bytes
+    FROM telemetry_samples s JOIN gateways g ON g.id=s.gateway_id LEFT JOIN users u ON u.id=s.user_id
+    WHERE ${sampleWhere} GROUP BY identity_key`).all(...sampleParams);
+  const sampleCount = db.prepare(`SELECT COUNT(*) AS total FROM telemetry_samples s JOIN gateways g ON g.id=s.gateway_id WHERE ${sampleWhere}`).get(...sampleParams)?.total || 0;
+  const clientWhere = clientConditions.length ? `WHERE ${clientConditions.join(' AND ')}` : '';
+  const clients = db.prepare(`SELECT c.gateway_id,c.mac_address,c.user_id,c.access_type,c.auth_status,c.ssid,c.session_started_at,
+    c.last_seen_at,c.last_counter_at,c.incoming_bps,c.outgoing_bps,u.full_name,u.email
+    FROM clients c JOIN gateways g ON g.id=c.gateway_id LEFT JOIN users u ON u.id=c.user_id ${clientWhere}`).all(...clientParams);
+  const settings = db.prepare('SELECT account_ssid,free_ssid FROM portal_settings WHERE id=1').get() || {};
+  const resolvedSsid = row => ssidFromGateway({ ssid:row.ssid }) || (row.access_type === 'limited' ? settings.free_ssid : settings.account_ssid) || 'SSID tidak diketahui';
+  const deviceKey = row => `${row.gateway_id}|${row.mac_address}`;
+  const userKey = row => row.user_id ? `user:${row.user_id}` : `device:${deviceKey(row)}`;
+  const positive = value => Math.max(0, Number(value || 0));
+  const firstBucket = Math.floor(startAt.getTime() / bucketMs) * bucketMs;
+  const lastBucket = Math.floor(now.getTime() / bucketMs) * bucketMs;
+  const ssids = new Map();
+  const users = new Map();
+  const activeUsers = new Set();
+
+  const ensureSsid = name => {
+    if (!ssids.has(name)) ssids.set(name, { ssid:name,incoming_bytes:0,outgoing_bytes:0,incoming_bps:0,outgoing_bps:0,active_users:0,_active:new Set() });
+    return ssids.get(name);
+  };
+  const ensureUser = row => {
+    const key = userKey(row);
+    if (!users.has(key)) users.set(key, {
+      key,name:row.full_name || (row.access_type === 'limited' ? `Free · ${String(row.mac_address || '').slice(-8).toUpperCase()}` : `Perangkat · ${String(row.mac_address || '').slice(-8).toUpperCase()}`),
+      detail:row.email || row.mac_address || 'Perangkat WiFi',access_type:row.access_type || 'pending',ssid:resolvedSsid(row),
+      incoming_bytes:0,outgoing_bytes:0,incoming_bps:0,outgoing_bps:0,duration_seconds:0,active:false
+    });
+    return users.get(key);
+  };
+
+  for (const client of clients) {
+    const ssidName = resolvedSsid(client);
+    const ssid = ensureSsid(ssidName);
+    const user = ensureUser(client);
+    const isActive = client.auth_status === 'authorized';
+    if (isActive) {
+      activeUsers.add(user.key);
+      ssid._active.add(user.key);
+      user.active = true;
+      const incomingBps = positive(client.incoming_bps);
+      const outgoingBps = positive(client.outgoing_bps);
+      ssid.incoming_bps += incomingBps; ssid.outgoing_bps += outgoingBps;
+      user.incoming_bps += incomingBps; user.outgoing_bps += outgoingBps;
+    }
+    const sessionStart = new Date(client.session_started_at || 0).getTime();
+    const sessionEnd = isActive ? now.getTime() : new Date(client.last_counter_at || client.last_seen_at || 0).getTime();
+    user.duration_seconds = Math.max(user.duration_seconds, sessionStart > 0 && sessionEnd >= sessionStart ? Math.floor((sessionEnd - sessionStart) / 1000) : 0);
+  }
+
+  for (const row of historicalSsids) {
+    const ssid = ensureSsid(resolvedSsid(row));
+    ssid.incoming_bytes += positive(row.incoming_bytes);
+    ssid.outgoing_bytes += positive(row.outgoing_bytes);
+  }
+  for (const row of historicalUsers) {
+    const user = ensureUser(row);
+    user.incoming_bytes += positive(row.incoming_bytes);
+    user.outgoing_bytes += positive(row.outgoing_bytes);
+  }
+
+  const timelineByBucket = new Map(timelineRows.map(row => [Number(row.bucket_at) * 1000,row]));
+  const timeline = [];
+  for (let at = firstBucket; at <= lastBucket; at += bucketMs) {
+    const point = timelineByBucket.get(at) || {};
+    timeline.push({ at:new Date(at).toISOString(),incoming_bps:positive(point.incoming_bps),outgoing_bps:positive(point.outgoing_bps),incoming_bytes:positive(point.incoming_bytes),outgoing_bytes:positive(point.outgoing_bytes) });
+  }
+  const incomingBytes = timelineRows.reduce((total,row) => total + positive(row.incoming_bytes),0);
+  const outgoingBytes = timelineRows.reduce((total,row) => total + positive(row.outgoing_bytes),0);
+  for (const ssid of ssids.values()) ssid.active_users = ssid._active.size;
+  const ssidRows = [...ssids.values()].map(({ _active, ...ssid }) => ({ ...ssid,total_bytes:ssid.incoming_bytes + ssid.outgoing_bytes }))
+    .filter(ssid => ssid.total_bytes > 0 || ssid.active_users > 0 || ssid.incoming_bps + ssid.outgoing_bps > 0)
+    .sort((a,b) => b.total_bytes - a.total_bytes || (b.incoming_bps + b.outgoing_bps) - (a.incoming_bps + a.outgoing_bps));
+  const userRows = [...users.values()].map(user => ({ ...user,total_bytes:user.incoming_bytes + user.outgoing_bytes }))
+    .filter(user => user.total_bytes > 0 || user.active || user.incoming_bps + user.outgoing_bps > 0)
+    .sort((a,b) => b.total_bytes - a.total_bytes || (b.incoming_bps + b.outgoing_bps) - (a.incoming_bps + a.outgoing_bps)).slice(0,12);
+  const liveIncomingBps = clients.filter(client => client.auth_status === 'authorized').reduce((total,client) => total + positive(client.incoming_bps),0);
+  const liveOutgoingBps = clients.filter(client => client.auth_status === 'authorized').reduce((total,client) => total + positive(client.outgoing_bps),0);
+  return {
+    range,range_label:rangeConfig.label,generated_at:now.toISOString(),has_history:sampleCount > 0,sample_count:sampleCount,
+    summary:{ active_users:activeUsers.size,active_devices:clients.filter(client=>client.auth_status==='authorized').length,
+      tracked_devices:clients.filter(client=>client.last_counter_at).length,ssid_count:ssidRows.length,
+      incoming_bps:Math.round(liveIncomingBps),outgoing_bps:Math.round(liveOutgoingBps),
+      incoming_bytes:incomingBytes,outgoing_bytes:outgoingBytes,total_bytes:incomingBytes + outgoingBytes },
+    timeline,ssids:ssidRows,users:userRows,retention_days:30
+  };
 }
 
 async function api(req, res, url) {
@@ -670,6 +832,11 @@ async function api(req, res, url) {
       projects,
       gateways:gateways.map(gateway => ({ ...gateway, status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline' }))
     });
+  }
+  if (route === '/api/admin/monitoring' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    sweepOfflineClients();
+    return json(res, 200, monitoringData(url));
   }
   if (route === '/api/admin/projects' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;

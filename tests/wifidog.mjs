@@ -133,6 +133,12 @@ try {
   });
   const adminCookie = adminLogin.headers.get('set-cookie');
   assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  const monitoringResponse = await fetch(`${baseUrl}/api/admin/monitoring?range=1h`, { headers:{ cookie:adminCookie } });
+  const monitoring = await monitoringResponse.json();
+  assert(monitoringResponse.status === 200 && monitoring.has_history && monitoring.sample_count >= 4, 'Monitoring harus membaca histori callback counter WiFiDog.');
+  assert(monitoring.timeline.length >= 12 && monitoring.summary.total_bytes > 0, 'Monitoring global harus menyediakan timeline dan total penggunaan gabungan.');
+  assert(monitoring.ssids.some(item=>item.ssid==='@PERUMNET_WiFi') && monitoring.ssids.some(item=>item.ssid==='@PERUMNET_FreeWiFi'), 'Monitoring harus memisahkan penggunaan setiap SSID.');
+  assert(monitoring.users.some(item=>item.detail==='wifidog-test@example.com') && monitoring.users.some(item=>item.access_type==='limited'), 'Monitoring harus menyediakan grafik pengguna akun dan perangkat Free.');
   const portalSettingsUpdate = await fetch(`${baseUrl}/api/admin/settings`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
     body:JSON.stringify({ accountSsid:'@PERUMNET_WiFi',freeSsid:'@PERUMNET_FreeWiFi',welcomeTitle:'Masuk ke internet cepat.',welcomeText:'Gunakan akun terverifikasi.',termsText:'Ketentuan jaringan.',limitedBandwidthKbps:512 })
@@ -200,6 +206,8 @@ try {
   });
   const deleted = await deleteResponse.json();
   assert(deleteResponse.status === 200 && deleted.deletedAccount && deleted.gatewayAuthorizationRevoked, 'Hapus admin harus menghapus akun dan mencabut otorisasi gateway.');
+  const monitoringAfterDelete = await (await fetch(`${baseUrl}/api/admin/monitoring?range=1h`, { headers:{ cookie:adminCookie } })).json();
+  assert(!monitoringAfterDelete.users.some(item=>item.detail==='wifidog-test@example.com'), 'Hapus akun harus ikut menghapus histori monitoring pengguna tersebut.');
   const revokedCounter = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
   assert(revokedCounter.body === 'Auth: 0\n', 'Token lama harus ditolak setelah data dihapus admin.');
   const revokedQuery = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}`);
