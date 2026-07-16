@@ -21,6 +21,10 @@ Gunakan `REYEE_AUTH_MODE=redirect` saat konfigurasi gateway telah siap. Jika gat
 
 Dashboard membuat notifikasi ketika gateway mengonfirmasi login, serta ketika client logout, masa akses berakhir, atau heartbeat tidak lagi diterima. Batas client dianggap offline dapat diatur dengan `CLIENT_OFFLINE_MINUTES` (default 20 menit). Nilai ini sebaiknya lebih panjang dari interval counters/heartbeat pada gateway.
 
+Dashboard admin membaca callback WiFiDog `stage=counters` (`incoming` dan `outgoing`) untuk menampilkan bandwidth per interval, durasi login, serta total pemakaian data per perangkat. Tampilan diperbarui setiap 5 detik; angka berubah mengikuti interval counter yang dikirim firmware Reyee, bukan trafik yang melewati VPS. Bila gateway belum mengirim counter, dashboard menampilkan status **Menunggu telemetry**.
+
+Daftar perangkat memakai pagination server dengan 10 baris sebagai default dan pilihan 25, 50, atau 100 baris. Filter kategori memisahkan **Pengguna Terdaftar**, **Free / Limited**, dan **Belum Login**. Ekspor CSV dibuat langsung dari data akun terdaftar; perangkat Free/Limited dan perangkat yang belum login tidak pernah dimasukkan ke file.
+
 ## Multi-project dan multi-gateway
 
 Setiap nilai `gw_id` yang diterima dari Ruijie otomatis dibuat sebagai gateway di dashboard. Admin dapat mengelompokkan gateway ke beberapa project, mengisi nama, lokasi, dan model, lalu memfilter data perangkat serta notifikasi per project atau per gateway. Satu MAC yang berpindah gateway disimpan sebagai dua konteks perangkat terpisah sehingga status dan pencabutan akses tidak saling menimpa.

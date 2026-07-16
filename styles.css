@@ -299,3 +299,60 @@ body.admin-view .sidebar a.sidebar-brand:focus-visible{border-radius:10px;box-sh
   body.admin-view tbody td:not(:first-child):before{flex-basis:88px}
   body.admin-view .network-cell{max-width:calc(100% - 100px)}
 }
+
+/* Paginated visitor categories and WiFiDog traffic telemetry */
+body.admin-view table{min-width:1880px}
+.live-monitor{display:flex;align-items:center;gap:7px;margin-bottom:10px;color:#708683;font-size:10px;font-weight:700}
+.live-monitor i{width:8px;height:8px;background:#e1a33c;border-radius:50%;box-shadow:0 0 0 4px #e1a33c1c}
+.live-monitor small{color:#95a29f;font-size:9px;font-weight:500}
+.live-monitor.synced i{background:#18ad7d;box-shadow:0 0 0 4px #18ad7d1c;animation:telemetry-pulse 2s infinite}
+.live-monitor.error i{background:#dc625b;box-shadow:0 0 0 4px #dc625b1c}
+@keyframes telemetry-pulse{50%{box-shadow:0 0 0 7px #18ad7d08}}
+.export-action{display:grid;justify-items:end;gap:6px;max-width:260px;text-align:right}
+.export-action small{color:#8b9996;font-size:9px;line-height:1.4}
+.category-filter{display:flex;gap:8px;padding:0 25px 14px;border-bottom:1px solid #edf2f1}
+.category-filter button{display:flex;align-items:center;gap:7px;min-height:36px;padding:8px 11px;color:#617672;background:#f6f9f8;border:1px solid #e1ebe8;border-radius:9px;font-size:10px;font-weight:700;white-space:nowrap}
+.category-filter button:hover{color:#087f77;border-color:#bcded9}
+.category-filter button.active{color:#fff;background:#079e95;border-color:#079e95;box-shadow:0 7px 16px #079e9522}
+.category-filter b{display:grid;place-items:center;min-width:20px;height:20px;padding:0 5px;color:inherit;background:#ffffffb8;border-radius:99px;font-size:8px}
+.category-filter button.active b{color:#078d85;background:#fff}
+body.admin-view .table-tools{align-items:center;justify-content:space-between;flex-wrap:wrap}
+.page-size-control{display:flex;align-items:center;gap:9px;margin:0;color:#7b8c89;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.35px}
+.page-size-control select{min-width:70px;padding:9px 26px 9px 10px;color:#36534f;background:#fbfdfc;border:1px solid #d9e6e3;border-radius:8px;font:700 11px "DM Sans"}
+.category-badge{display:inline-block;padding:5px 8px;border-radius:99px;font-size:9px;font-weight:800;white-space:nowrap}
+.category-badge.account{color:#087c74;background:#ddf5f1}.category-badge.free{color:#956316;background:#fff0d7}.category-badge.pending{color:#6f7977;background:#edf1ef}
+.telemetry-rate,.usage-cell{display:block;min-width:105px}.telemetry-rate b,.telemetry-rate small,.usage-cell b,.usage-cell small{display:block;white-space:nowrap}
+.telemetry-rate b{color:#087e74;font-size:10px}.telemetry-rate small{margin-top:3px;color:#587b77;font-size:9px}
+.usage-cell b{color:#375852;font-size:10px}.usage-cell small{margin-top:3px;color:#879692;font-size:8px}
+.telemetry-waiting,.telemetry-ended{display:inline-block;max-width:115px;color:#927024;font-size:9px;line-height:1.35}.telemetry-ended{color:#889490}
+.duration-cell{color:#405e59;font-size:10px;font-weight:700;white-space:nowrap}
+.pagination{display:flex;align-items:center;gap:6px}.pagination b{min-width:54px;color:#52706b;text-align:center;font-size:10px}
+.pagination button{display:grid;place-items:center;width:30px;height:30px;padding:0;background:#f0f8f6;border:1px solid #dceae7;border-radius:8px}
+.pagination button:disabled{cursor:not-allowed;opacity:.35}
+
+@media(max-width:760px){
+  body.admin-view table{min-width:0}
+  body.admin-view .table-heading{display:flex;align-items:flex-start;flex-direction:column}
+  body.admin-view .export-action{justify-items:stretch;width:100%;max-width:none;text-align:left}
+  body.admin-view .export-action .outline-button{width:100%;margin:0}
+  body.admin-view .category-filter{width:100%;padding:0 14px 13px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:none}
+  body.admin-view .category-filter::-webkit-scrollbar{display:none}
+  body.admin-view .category-filter button{flex:0 0 auto}
+  body.admin-view .table-tools{align-items:stretch;flex-direction:column;gap:11px}
+  body.admin-view .page-size-control{justify-content:space-between;width:100%}
+  body.admin-view .page-size-control select{min-height:40px}
+  body.admin-view .table-footer{align-items:center;gap:10px;flex-wrap:wrap}
+  body.admin-view .table-footer>span{flex:1 1 170px}
+  body.admin-view .telemetry-rate,body.admin-view .usage-cell{min-width:0;text-align:right}
+  body.admin-view .usage-cell small{white-space:normal}
+}
+
+@media(max-width:420px){
+  .live-monitor{align-items:flex-start;flex-wrap:wrap}.live-monitor small{flex-basis:100%;padding-left:15px}
+  body.admin-view .category-filter{padding-inline:12px}
+  body.admin-view .category-filter button{padding:7px 9px}
+  body.admin-view .table-footer{align-items:stretch;flex-direction:column}
+  body.admin-view .table-footer>span{flex:none}
+  body.admin-view .pagination{justify-content:space-between;width:100%}
+  body.admin-view .pagination button{width:42px;height:36px}
+}

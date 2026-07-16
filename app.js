@@ -16,6 +16,8 @@ let forgotPasswordReturn = 'portal';
 const destinationUrl = 'https://perumnet.id';
 let redirectTimer;
 let notificationTimer;
+let monitoringTimer;
+let searchTimer;
 async function api(path, payload, method) { const requestMethod = method || (payload ? 'POST' : 'GET'); const hasBody = payload !== undefined && requestMethod !== 'GET'; const response = await fetch(path, { method:requestMethod, credentials:'same-origin', headers:hasBody ? { 'content-type':'application/json' } : undefined, body:hasBody ? JSON.stringify(payload) : undefined }); const raw = await response.text(); let result; try { result = JSON.parse(raw); } catch { throw new Error(response.ok ? 'Respons server portal tidak valid.' : `Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); } if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
 let portalSettings = {};
@@ -50,10 +52,13 @@ async function loadPortalSettings() {
 const leads = [];
 let networkCatalog = { projects:[], gateways:[] };
 const adminScope = { projectId:'', gatewayId:'' };
-function scopeQuery() {
+const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
+let leadsLoading = false;
+function scopeQuery(extra={}) {
   const params = new URLSearchParams();
   if (adminScope.gatewayId) params.set('gatewayId',adminScope.gatewayId);
   else if (adminScope.projectId) params.set('projectId',adminScope.projectId);
+  Object.entries(extra).forEach(([key,value]) => { if (value !== '' && value !== undefined && value !== null) params.set(key,String(value)); });
   const value=params.toString(); return value ? `?${value}` : '';
 }
 function selectedProject() { return networkCatalog.projects.find(project=>project.id===adminScope.projectId); }
@@ -115,26 +120,78 @@ function startNotificationPolling() {
   clearInterval(notificationTimer);
   notificationTimer = setInterval(() => loadNotifications().catch(() => {}), 15000);
 }
-async function loadAdminLeads() {
-  const { clients, stats } = await api(`/api/admin/clients${scopeQuery()}`);
-  leads.splice(0, leads.length, ...clients.map(row => ({
-    name:row.full_name || 'Perangkat belum login', email:row.email || row.mac_address,
-    ip:row.client_ip || '—', ssid:row.ssid || '—', mac:row.mac_address,
-    time:formatTime(row.last_seen_at), initials:row.full_name ? row.full_name.split(' ').slice(0,2).map(part => part[0]).join('') : 'Wi',
-    phone:row.phone_number || '—', address:row.address || '—', registered:!!row.email,
-    type:row.auth_status === 'pending' && row.authorized_until ? 'offline' : row.access_type === 'high_speed' ? 'high' : row.access_type === 'limited' ? 'limited' : 'pending', verified:!!row.is_verified,
-    status:row.auth_status, gatewayId:row.gateway_id, gateway:row.gateway_name || row.gateway_id,
-    gatewayLocation:row.gateway_location || '—', projectId:row.project_id, project:row.project_name || '—'
-  })));
-  $('#total-leads').textContent = stats.total;
-  $('#today-leads').textContent = stats.today;
-  $('#authorized-leads').textContent = stats.authorized;
-  renderLeads();
+function startMonitoringPolling() {
+  clearInterval(monitoringTimer);
+  monitoringTimer=setInterval(()=>{
+    if(document.visibilityState==='visible' && screens.dashboard.classList.contains('active') && $('#leads-tab').classList.contains('active')) loadAdminLeads({ silent:true });
+  },5000);
 }
-function renderLeads(data=leads) {
+const formatBytes = value => {
+  const bytes = Math.max(0,Number(value || 0));
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  const units=['KB','MB','GB','TB']; let amount=bytes/1024,unit=units[0];
+  for(let index=1;index<units.length && amount>=1024;index+=1){ amount/=1024; unit=units[index]; }
+  return `${amount >= 100 ? amount.toFixed(0) : amount >= 10 ? amount.toFixed(1) : amount.toFixed(2)} ${unit}`;
+};
+const formatBitrate = value => {
+  const bps=Math.max(0,Number(value || 0));
+  if (bps<1000) return `${Math.round(bps)} bps`;
+  if (bps<1000000) return `${(bps/1000).toFixed(bps>=100000?0:1)} Kbps`;
+  return `${(bps/1000000).toFixed(bps>=10000000?1:2)} Mbps`;
+};
+const formatDuration = value => {
+  const seconds=Math.max(0,Math.floor(Number(value || 0))),hours=Math.floor(seconds/3600),minutes=Math.floor((seconds%3600)/60),remaining=seconds%60;
+  if(hours) return `${hours}j ${minutes}m`;
+  if(minutes) return `${minutes}m ${remaining}d`;
+  return `${remaining} detik`;
+};
+function updateMonitoringStatus(state='live') {
+  const status=$('#monitoring-status'); if(!status) return;
+  status.classList.toggle('error',state==='error');
+  status.classList.toggle('synced',state==='live');
+  status.querySelector('small').textContent=state==='error' ? 'Sinkronisasi terputus' : `Diperbarui ${new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
+}
+async function loadAdminLeads({ silent=false }={}) {
+  if (leadsLoading) return;
+  leadsLoading=true;
+  try {
+    const result = await api(`/api/admin/clients${scopeQuery({ page:adminTable.page,limit:adminTable.limit,category:adminTable.category,search:adminTable.search })}`);
+    const { clients,stats,categories,pagination }=result;
+    leads.splice(0, leads.length, ...clients.map(row => ({
+      name:row.full_name || (row.category === 'free' ? 'Pengguna Free' : 'Perangkat belum login'), email:row.email || row.mac_address,
+      ip:row.client_ip || '—', ssid:row.ssid || '—', mac:row.mac_address,
+      time:formatTime(row.last_seen_at), initials:row.full_name ? row.full_name.split(' ').slice(0,2).map(part => part[0]).join('') : row.category === 'free' ? 'FR' : 'Wi',
+      phone:row.phone_number || '—', address:row.address || '—', registered:!!row.email, category:row.category || 'pending',
+      type:row.auth_status === 'pending' && row.authorized_until ? 'offline' : row.access_type === 'high_speed' ? 'high' : row.access_type === 'limited' ? 'limited' : 'pending', verified:!!row.is_verified,
+      status:row.auth_status, gatewayId:row.gateway_id, gateway:row.gateway_name || row.gateway_id,
+      gatewayLocation:row.gateway_location || '—', projectId:row.project_id, project:row.project_name || '—',
+      incomingBps:row.incoming_bps,outgoingBps:row.outgoing_bps,incomingBytes:row.incoming_bytes || 0,outgoingBytes:row.outgoing_bytes || 0,
+      totalUsage:row.total_usage_bytes || 0,durationSeconds:row.duration_seconds || 0,telemetryStatus:row.telemetry_status || 'waiting'
+    })));
+    Object.assign(adminTable,pagination);
+    $('#total-leads').textContent = stats.total;
+    $('#today-leads').textContent = stats.today;
+    $('#authorized-leads').textContent = stats.authorized;
+    ['all','account','free','pending'].forEach(key=>{ $(`#category-count-${key}`).textContent=categories[key] || 0; });
+    renderLeads(); updateMonitoringStatus('live');
+  } catch(error) {
+    updateMonitoringStatus('error');
+    if(!silent) throw error;
+  } finally { leadsLoading=false; }
+}
+function renderLeads() {
   const access = { high:'High Speed', limited:'Limited', pending:'Menunggu login', offline:'Offline' };
-  $('#lead-rows').innerHTML = data.map(l => `<tr><td data-label="Pengunjung"><div class="user-cell"><span class="avatar">${escapeHtml(l.initials)}</span><div><b>${escapeHtml(l.name)}</b><span>${escapeHtml(l.email)}</span>${l.type === 'high' && l.verified ? '<em class="verified-status">✓ Email terverifikasi</em>' : ''}</div></div></td><td data-label="Project"><span class="network-cell"><b>${escapeHtml(l.project)}</b></span></td><td data-label="Gateway"><span class="network-cell"><b>${escapeHtml(l.gateway)}</b><small>${escapeHtml(l.gatewayId)}</small></span></td><td data-label="Nomor HP">${escapeHtml(l.phone)}</td><td data-label="Alamat" class="address-cell">${escapeHtml(l.address)}</td><td data-label="IP Klien">${escapeHtml(l.ip)}</td><td data-label="Status"><span class="access-badge ${l.type}">${access[l.type]}</span></td><td data-label="SSID">${escapeHtml(l.ssid)}</td><td data-label="Terakhir terlihat">${escapeHtml(l.time)}</td><td data-label="MAC" class="device-cell">${escapeHtml(l.mac)}</td><td data-label="Aksi" class="action-cell"><button class="delete-client" type="button" data-gateway="${escapeHtml(l.gatewayId)}" data-mac="${escapeHtml(l.mac)}" aria-label="Hapus ${escapeHtml(l.name)}">Hapus data</button></td></tr>`).join('') || '<tr class="empty-row"><td colspan="11" class="empty-state">Belum ada perangkat yang dilaporkan gateway pada filter ini.</td></tr>';
-  $('#result-count').textContent = data.length === leads.length ? `Menampilkan ${data.length} perangkat` : `Menampilkan ${data.length} hasil pencarian`;
+  const categoryLabel={ account:'Pengguna Terdaftar',free:'Free / Limited',pending:'Belum Login' };
+  $('#lead-rows').innerHTML = leads.map(l => {
+    const bandwidth=l.telemetryStatus==='waiting' ? '<span class="telemetry-waiting">Menunggu telemetry</span>' : l.telemetryStatus==='ended' ? '<span class="telemetry-ended">Sesi selesai</span>' : `<span class="telemetry-rate"><b>↓ ${escapeHtml(formatBitrate(l.incomingBps))}</b><small>↑ ${escapeHtml(formatBitrate(l.outgoingBps))}</small></span>`;
+    const usage=`<span class="usage-cell"><b>${escapeHtml(formatBytes(l.totalUsage))}</b><small>↓ ${escapeHtml(formatBytes(l.incomingBytes))} · ↑ ${escapeHtml(formatBytes(l.outgoingBytes))}</small></span>`;
+    return `<tr><td data-label="Pengunjung"><div class="user-cell"><span class="avatar">${escapeHtml(l.initials)}</span><div><b>${escapeHtml(l.name)}</b><span>${escapeHtml(l.email)}</span>${l.type === 'high' && l.verified ? '<em class="verified-status">✓ Email terverifikasi</em>' : ''}</div></div></td><td data-label="Kategori"><span class="category-badge ${escapeHtml(l.category)}">${escapeHtml(categoryLabel[l.category] || categoryLabel.pending)}</span></td><td data-label="Project"><span class="network-cell"><b>${escapeHtml(l.project)}</b></span></td><td data-label="Gateway"><span class="network-cell"><b>${escapeHtml(l.gateway)}</b><small>${escapeHtml(l.gatewayId)}</small></span></td><td data-label="Nomor HP">${escapeHtml(l.phone)}</td><td data-label="Alamat" class="address-cell">${escapeHtml(l.address)}</td><td data-label="IP Klien">${escapeHtml(l.ip)}</td><td data-label="Status"><span class="access-badge ${l.type}">${access[l.type]}</span></td><td data-label="Bandwidth">${bandwidth}</td><td data-label="Durasi Login"><span class="duration-cell">${escapeHtml(formatDuration(l.durationSeconds))}</span></td><td data-label="Data Terpakai">${usage}</td><td data-label="SSID">${escapeHtml(l.ssid)}</td><td data-label="Terakhir terlihat">${escapeHtml(l.time)}</td><td data-label="MAC" class="device-cell">${escapeHtml(l.mac)}</td><td data-label="Aksi" class="action-cell"><button class="delete-client" type="button" data-gateway="${escapeHtml(l.gatewayId)}" data-mac="${escapeHtml(l.mac)}" aria-label="Hapus ${escapeHtml(l.name)}">Hapus data</button></td></tr>`;
+  }).join('') || '<tr class="empty-row"><td colspan="15" class="empty-state">Belum ada perangkat pada kategori atau pencarian ini.</td></tr>';
+  const start=adminTable.total ? (adminTable.page-1)*adminTable.limit+1 : 0,end=Math.min(adminTable.page*adminTable.limit,adminTable.total);
+  $('#result-count').textContent=`Menampilkan ${start}–${end} dari ${adminTable.total} perangkat`;
+  $('#page-indicator').textContent=`${adminTable.page} / ${adminTable.totalPages}`;
+  $('#page-prev').disabled=adminTable.page<=1;
+  $('#page-next').disabled=adminTable.page>=adminTable.totalPages;
 }
 function projectOptions(selected='') { return networkCatalog.projects.map(project=>`<option value="${escapeHtml(project.id)}" ${project.id===selected?'selected':''}>${escapeHtml(project.name)}</option>`).join(''); }
 function visibleGateways() { return networkCatalog.gateways.filter(gateway=>gateway.id!=='unassigned' || Number(gateway.client_count)>0); }
@@ -162,7 +219,7 @@ async function loadAdminNetwork() {
 }
 renderLeads();
 loadPortalSettings();
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadNotifications()]); show('dashboard'); startNotificationPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadNotifications()]); show('dashboard'); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
@@ -180,20 +237,24 @@ $('#account-status-action').onclick = () => location.assign(destinationUrl);
 $('#resend-verification').onclick = async e => { const feedback=$('#verification-status'); if (!pendingVerificationEmail) { feedback.textContent='Kembali ke formulir lalu masukkan ulang data pendaftaran.'; return; } e.currentTarget.disabled=true; feedback.textContent='Mengirim ulang email…'; try { const result=await api('/api/auth/resend',{ email:pendingVerificationEmail }); feedback.textContent=result.message; } catch(error) { feedback.textContent=error.message; } finally { e.currentTarget.disabled=false; } }; $('#back-from-verify').onclick = showAccessChoice;
 $('#browse-button').onclick = () => { clearInterval(redirectTimer); location.assign(destinationUrl); };
 $('#admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#access-admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#back-portal').onclick = () => location.assign('/');
-$('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
+$('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); clearInterval(monitoringTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
 function setSidebar(open) { document.body.classList.toggle('sidebar-open',open); $('#sidebar-toggle').setAttribute('aria-expanded',String(open)); }
 $('#sidebar-toggle').onclick = () => setSidebar(!document.body.classList.contains('sidebar-open')); $('#sidebar-backdrop').onclick = () => setSidebar(false);
 $('#notification-toggle').onclick = event => { event.stopPropagation(); setNotificationPanel(!$('#notification-panel').classList.contains('open')); };
 $('#notification-panel').onclick = event => event.stopPropagation();
 $('#notification-read-all').onclick = async () => { try { await api(`/api/admin/notifications/read${scopeQuery()}`, {}); await loadNotifications(); } catch (error) { alert(error.message); } };
 document.addEventListener('click', () => setNotificationPanel(false));
-document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); setNotificationPanel(false); setSidebar(false); });
+document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); if(tab==='leads') loadAdminLeads({ silent:true }); setNotificationPanel(false); setSidebar(false); });
 document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
-$('#scope-project').addEventListener('change',async event=>{ adminScope.projectId=event.target.value; adminScope.gatewayId=''; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
-$('#scope-gateway').addEventListener('change',async event=>{ adminScope.gatewayId=event.target.value; const gateway=selectedGateway(); if(gateway) adminScope.projectId=gateway.project_id; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
+$('#scope-project').addEventListener('change',async event=>{ adminScope.projectId=event.target.value; adminScope.gatewayId=''; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
+$('#scope-gateway').addEventListener('change',async event=>{ adminScope.gatewayId=event.target.value; const gateway=selectedGateway(); if(gateway) adminScope.projectId=gateway.project_id; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadNotifications()]); } catch(error){ alert(error.message); } });
 $('#project-form').addEventListener('submit',async event=>{ event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button'),feedback=$('#project-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent=''; try { await api('/api/admin/projects',{ name:data.get('name'),location:data.get('location') }); form.reset(); feedback.textContent='Project berhasil ditambahkan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
 $('#gateway-list').addEventListener('submit',async event=>{ const form=event.target.closest('.gateway-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.gateway-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent='Menyimpan…'; try { await api('/api/admin/gateways',{ gatewayId:form.dataset.gatewayId,projectId:data.get('projectId'),name:data.get('name'),location:data.get('location'),model:data.get('model') }); feedback.textContent='Identitas gateway tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); await loadAdminLeads(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
-$('#search-input').addEventListener('input', e => { const q=e.target.value.toLowerCase(); renderLeads(leads.filter(l => `${l.name} ${l.email} ${l.phone} ${l.address} ${l.mac} ${l.ip} ${l.ssid} ${l.project} ${l.gateway} ${l.gatewayId}`.toLowerCase().includes(q))); });
+$('#search-input').addEventListener('input', event => { clearTimeout(searchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; searchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
+$('#category-filter').addEventListener('click',event=>{ const button=event.target.closest('[data-category]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#category-filter [data-category]').forEach(item=>item.classList.toggle('active',item===button)); adminTable.category=button.dataset.category; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
+$('#page-size').addEventListener('change',event=>{ adminTable.limit=Number(event.target.value)||10; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
+$('#page-prev').onclick=()=>{ if(adminTable.page<=1) return; adminTable.page-=1; loadAdminLeads().catch(error=>alert(error.message)); };
+$('#page-next').onclick=()=>{ if(adminTable.page>=adminTable.totalPages) return; adminTable.page+=1; loadAdminLeads().catch(error=>alert(error.message)); };
 $('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, dan riwayat akses akan dihapus.' : `Perangkat dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
-$('#export-csv').onclick = () => { const csvCell = value => `"${String(value ?? '').replaceAll('"','""')}"`; const csv=['Nama,Email / Identitas,Project,Gateway,Gateway ID,Nomor HP,Alamat,MAC,IP Klien,SSID,Tipe Akses,Status,Waktu Terakhir',...leads.map(l=>[l.name,l.email,l.project,l.gateway,l.gatewayId,l.phone,l.address,l.mac,l.ip,l.ssid,l.type === 'high' ? 'High Speed' : l.type === 'limited' ? 'Limited' : l.type === 'offline' ? 'Offline' : 'Menunggu login',l.status,l.time].map(csvCell).join(','))].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`data-perangkat-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); URL.revokeObjectURL(a.href); };
+$('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
 $('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const accountSsid=$('#setting-account-ssid').value.trim() || '@PERUMNET_WiFi', freeSsid=$('#setting-free-ssid').value.trim() || '@PERUMNET_FreeWiFi', title=$('#setting-title').value || 'Masuk ke internet cepat.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { accountSsid,freeSsid,welcomeTitle:title,welcomeText:copy,termsText:terms,limitedBandwidthKbps:bandwidth }); portalSettings={ ...portalSettings,account_ssid:accountSsid,free_ssid:freeSsid,default_ssid:accountSsid,welcome_title:title,welcome_text:copy,terms_text:terms,limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || accountSsid); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#account-profile-ssid').textContent=accountSsid; $('#free-profile-ssid').textContent=freeSsid; $('#preview-account-ssid').textContent=accountSsid; $('#preview-free-ssid').textContent=freeSsid; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });

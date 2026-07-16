@@ -61,8 +61,11 @@ try {
   assert(freePortalCallback.status === 302 && new URL(freePortalCallback.headers.get('location')).pathname === '/free', 'Callback portal limited harus kembali ke /free.');
   const queryAfter = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryAfter.body === 'Auth: 1\n', 'Query session aktif harus diizinkan.');
-  const counters = await request(`/free/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
+  const counters = await request(`/free/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}&incoming=100000&outgoing=50000`);
   assert(counters.body === 'Auth: 1\n', 'Counters dengan token aktif harus diizinkan.');
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const countersUpdated = await request(`/free/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}&incoming=180000&outgoing=90000`);
+  assert(countersUpdated.body === 'Auth: 1\n', 'Pembaruan counter WiFiDog harus tetap mempertahankan akses.');
   await new Promise(resolve => setTimeout(resolve, 1900));
   const queryExpired = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryExpired.body === 'Auth: 0\n', 'Session limited harus ditutup setelah durasinya habis.');
@@ -119,8 +122,11 @@ try {
   assert(loginResponse.status === 200 && accountLogin.authorization.profile === 'high_speed', 'Login akun terverifikasi harus membuat token High Speed.');
   const accountAuth = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
   assert(accountAuth.body === 'Auth: 1\n', 'Gateway harus menerima token login akun terverifikasi.');
-  const accountCounterWithoutGateway = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
+  const accountCounterWithoutGateway = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}&incoming=250000&outgoing=125000`);
   assert(accountCounterWithoutGateway.body === 'Auth: 1\n', 'Callback token tetap harus memakai gateway sesi jika gw_id tidak dikirim ulang.');
+  await new Promise(resolve => setTimeout(resolve, 40));
+  const accountCounterUpdated = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}&incoming=350000&outgoing=175000`);
+  assert(accountCounterUpdated.body === 'Auth: 1\n', 'Counter akun harus dapat diperbarui tanpa gw_id ketika token membawa identitas gateway.');
   const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ email:'admin-test@example.com', password:'admin-test-password' })
@@ -172,9 +178,23 @@ try {
   assert((await notificationsAfterRead.json()).unreadCount === 0, 'Badge notifikasi harus kosong setelah ditandai dibaca.');
   const clientsBeforeDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
   const clientList = await clientsBeforeDelete.json();
+  assert(clientList.pagination.limit === 10 && clientList.pagination.page === 1 && clientList.pagination.total >= 3, 'Daftar perangkat harus memakai pagination server dengan default 10 baris.');
+  assert(clientList.categories.account === 1 && clientList.categories.free >= 2, 'Dashboard harus memisahkan pengguna terdaftar dan Free/Limited.');
   assert(clientList.clients.filter(client=>client.mac_address===mac).length === 2, 'Satu MAC pada dua gateway tidak boleh saling menimpa.');
   assert(clientList.clients.some(client=>client.gateway_id==='test-gateway' && client.mac_address===mac && client.ssid==='@PERUMNET_FreeWiFi'), 'Alias VLAN client limited harus diganti SSID fallback portal free.');
   assert(clientList.clients.some(client=>client.mac_address===accountMac && client.ssid==='@PERUMNET_WiFi'), 'Parameter WLAN asli Ruijie harus diprioritaskan sebagai SSID portal akun.');
+  const accountTelemetry = clientList.clients.find(client=>client.mac_address===accountMac);
+  assert(accountTelemetry.total_usage_bytes === 525000 && accountTelemetry.incoming_bps > 0 && accountTelemetry.outgoing_bps > 0 && accountTelemetry.duration_seconds >= 0, 'Counter WiFiDog harus menjadi total usage, bandwidth real-time, dan durasi sesi akun.');
+  const freeCategoryResponse = await fetch(`${baseUrl}/api/admin/clients?category=free&limit=100`, { headers:{ cookie:adminCookie } });
+  const freeCategory = await freeCategoryResponse.json();
+  assert(freeCategory.pagination.limit === 100 && freeCategory.clients.every(client=>client.category==='free' && !client.email), 'Filter Free harus hanya berisi perangkat one-click dan mendukung 100 baris.');
+  const accountCategoryResponse = await fetch(`${baseUrl}/api/admin/clients?category=account`, { headers:{ cookie:adminCookie } });
+  const accountCategory = await accountCategoryResponse.json();
+  assert(accountCategory.clients.length === 1 && accountCategory.clients[0].email === 'wifidog-test@example.com', 'Filter pengguna terdaftar harus hanya berisi akun yang mengisi data.');
+  const exportResponse = await fetch(`${baseUrl}/api/admin/export.csv`, { headers:{ cookie:adminCookie } });
+  const exportedCsv = await exportResponse.text();
+  assert(exportResponse.status === 200 && exportResponse.headers.get('content-type').includes('text/csv'), 'Admin harus dapat mengekspor CSV pengguna terdaftar.');
+  assert(exportedCsv.includes('wifidog-test@example.com') && exportedCsv.includes(accountMac) && !exportedCsv.includes(mac), 'CSV harus berisi akun terdaftar dan tidak boleh memasukkan perangkat Free/Limited.');
   const deleteResponse = await fetch(`${baseUrl}/api/admin/clients`, {
     method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ gatewayId:'test-gateway',macAddress:accountMac })
   });
