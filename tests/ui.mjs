@@ -26,7 +26,9 @@ assert.ok(favicon.length > 1000 && favicon.subarray(1,4).toString() === 'PNG', '
 assert.match(html, /class="sidebar-brand brand brand-light" href="https:\/\/hotspot\.perumnet\.id"/, 'Logo sidebar harus kembali ke portal hotspot.');
 assert.match(html, /class="nav-icon"[^>]*viewBox="0 0 24 24"/, 'Sidebar harus memakai ikon SVG yang konsisten.');
 assert.match(html, /class="header-action"[^>]*id="notification-toggle"[^>]*title="Notifikasi"/, 'Header admin harus memakai tombol notifikasi SVG.');
+assert.match(html, /id="admin-refresh"[^>]*aria-label="Refresh seluruh data admin"[^>]*aria-busy="false"/, 'Header admin harus menyediakan refresh global yang accessible.');
 assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel aktivitas pelanggan.');
+assert.match(html, /id="table-refresh"[^>]*aria-busy="false"/, 'Tabel perangkat harus memiliki refresh manual sendiri.');
 assert.match(html, /id="category-filter"/, 'Dashboard harus memisahkan kategori pengguna terdaftar, Free, dan belum login.');
 assert.match(html, /id="page-size"[^>]*><option value="10" selected>10<\/option><option value="25">25<\/option><option value="50">50<\/option><option value="100">100<\/option>/, 'Tabel harus menyediakan pilihan 10 sampai 100 data per halaman.');
 assert.match(html, /id="monitoring-status"/, 'Dashboard harus menampilkan status monitoring real-time.');
@@ -72,6 +74,8 @@ assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\
 assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifikasi pelanggan dari server.');
 assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
 assert.match(app, /setInterval\(\(\)=>\{[\s\S]*loadAdminLeads\(\{ silent:true \}\)[\s\S]*\},5000\)/, 'Monitoring client harus diperbarui otomatis setiap lima detik.');
+assert.match(app, /async function refreshAdminData\(\)[\s\S]*loadAdminNetwork\(\)[\s\S]*Promise\.allSettled\(\[loadAdminLeads\(\),loadAdminMonitoring\(\),loadNotifications\(\)\]\)/, 'Refresh global harus menyinkronkan jaringan, tabel, grafik, dan notifikasi.');
+assert.match(app, /async function refreshTableData\(\)[\s\S]*tableRefreshPromise=loadAdminLeads\(\)/, 'Refresh tabel harus memperbarui data klien tanpa memuat ulang halaman.');
 assert.match(app, /\/api\/admin\/export\.csv/, 'Ekspor CSV harus dibuat server agar perangkat Free tidak ikut terunduh.');
 assert.match(app, /\/api\/admin\/monitoring/, 'Dashboard harus membaca agregasi monitoring historis dari server.');
 assert.match(app, /renderGlobalTrafficChart/, 'UI harus merender grafik gabungan tanpa library eksternal.');
@@ -113,5 +117,6 @@ assert.match(css, /\.analytics-grid/, 'Panel monitoring harus memiliki layout gr
 assert.match(css, /\.workspace-switcher\.open \.workspace-menu/, 'Menu workspace harus memiliki state buka yang jelas.');
 assert.match(css, /\.workspace-option\.active/, 'Project atau gateway terpilih harus memiliki state visual aktif.');
 assert.match(css, /body\.admin-view \.analytics-card\{width:100%;min-width:0;max-width:100%/, 'Panel grafik mobile harus dibatasi pada lebar viewport.');
+assert.match(css, /\.is-loading \.refresh-icon\{animation:refresh-spin/, 'Tombol refresh harus memiliki indikator loading yang jelas.');
 
 console.log('Responsive UI contract: PASS');
