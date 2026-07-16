@@ -343,6 +343,12 @@ body.admin-view table{min-width:1880px}
 @keyframes telemetry-pulse{50%{box-shadow:0 0 0 7px #18ad7d08}}
 .export-action{display:grid;justify-items:end;gap:6px;max-width:260px;text-align:right}
 .export-action small{color:#8b9996;font-size:9px;line-height:1.4}
+.table-action-buttons{display:flex;justify-content:flex-end;gap:8px}
+.table-refresh-button{display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.refresh-icon{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.is-loading .refresh-icon{animation:refresh-spin .8s linear infinite}
+@keyframes refresh-spin{to{transform:rotate(360deg)}}
+#table-refresh-status.error,#admin-refresh-status.error{color:#c14f49}
 .category-filter{display:flex;gap:8px;padding:0 25px 14px;border-bottom:1px solid #edf2f1}
 .category-filter button{display:flex;align-items:center;gap:7px;min-height:36px;padding:8px 11px;color:#617672;background:#f6f9f8;border:1px solid #e1ebe8;border-radius:9px;font-size:10px;font-weight:700;white-space:nowrap}
 .category-filter button:hover{color:#087f77;border-color:#bcded9}
@@ -388,4 +394,26 @@ body.admin-view .table-tools{align-items:center;justify-content:space-between;fl
   body.admin-view .table-footer>span{flex:none}
   body.admin-view .pagination{justify-content:space-between;width:100%}
   body.admin-view .pagination button{width:42px;height:36px}
+}
+
+/* Manual refresh controls for live admin data */
+.admin-refresh-button{display:flex;align-items:center;gap:9px;min-height:40px;padding:6px 10px 6px 9px;color:#557471;background:#f3f9f8;border:1px solid #ddeae8;border-radius:10px;text-align:left;transition:border-color .2s,color .2s,background .2s}
+.admin-refresh-button:hover{color:var(--teal-dark);background:#e9f8f5;border-color:#bfdfda}
+.admin-refresh-button:focus{outline:0}.admin-refresh-button:focus-visible{box-shadow:0 0 0 3px #04a99f2e}
+.admin-refresh-button:disabled,.table-refresh-button:disabled{cursor:wait;opacity:.7}
+.admin-refresh-button .refresh-icon{flex:0 0 17px;width:17px;height:17px}
+.admin-refresh-copy,.admin-refresh-copy b,.admin-refresh-copy small{display:block}
+.admin-refresh-copy{min-width:0}.admin-refresh-copy b{color:#3e5d59;font-size:9px;line-height:1.2}.admin-refresh-copy small{margin-top:2px;color:#82938f;font-size:7px;line-height:1.2;white-space:nowrap}
+.admin-profile{min-width:0}
+
+@media(max-width:760px){
+  body.admin-view .admin-profile{gap:6px}
+  body.admin-view .admin-refresh-button{display:grid;place-items:center;width:36px;min-width:36px;height:36px;min-height:36px;padding:0}
+  body.admin-view .admin-refresh-copy{display:none}
+  body.admin-view .table-action-buttons{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);width:100%}
+  body.admin-view .table-action-buttons .outline-button{width:100%;margin:0}
+  body.admin-view .export-action small{text-align:left}
+}
+@media(max-width:480px){
+  body.admin-view .table-action-buttons{grid-template-columns:1fr}
 }

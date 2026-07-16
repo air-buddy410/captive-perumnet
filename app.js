@@ -21,6 +21,8 @@ let notificationTimer;
 let monitoringTimer;
 let analyticsTimer;
 let searchTimer;
+let adminRefreshPromise;
+let tableRefreshPromise;
 async function api(path, payload, method) { const requestMethod = method || (payload ? 'POST' : 'GET'); const hasBody = payload !== undefined && requestMethod !== 'GET'; const response = await fetch(path, { method:requestMethod, credentials:'same-origin', headers:hasBody ? { 'content-type':'application/json' } : undefined, body:hasBody ? JSON.stringify(payload) : undefined }); const raw = await response.text(); let result; try { result = JSON.parse(raw); } catch { throw new Error(response.ok ? 'Respons server portal tidak valid.' : `Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); } if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
 let portalSettings = {};
@@ -107,6 +109,60 @@ function relativeTime(value) {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} jam lalu`;
   return formatTime(value);
+}
+function refreshClock() {
+  return new Date().toLocaleTimeString('id-ID',{ hour:'2-digit',minute:'2-digit',second:'2-digit' });
+}
+function setRefreshLoading(button,loading) {
+  if(!button) return;
+  button.disabled=loading;
+  button.classList.toggle('is-loading',loading);
+  button.setAttribute('aria-busy',String(loading));
+}
+function updateAdminRefreshStatus(state='live') {
+  const status=$('#admin-refresh-status');
+  if(!status) return;
+  const labels={ loading:'Menyinkronkan semua data…',error:'Refresh gagal · coba lagi' };
+  status.textContent=labels[state] || `Sinkron ${refreshClock()}`;
+  status.classList.toggle('error',state==='error');
+  if(state==='live') $('#dash-date').textContent=`Sinkron terakhir ${refreshClock()}`;
+}
+function updateTableRefreshStatus(state='live') {
+  const status=$('#table-refresh-status');
+  if(!status) return;
+  const labels={ loading:'Memperbarui tabel…',error:'Refresh tabel gagal.' };
+  status.textContent=labels[state] || `Tabel diperbarui ${refreshClock()}.`;
+  status.classList.toggle('error',state==='error');
+}
+async function refreshAdminData() {
+  if(!isAdminView) return;
+  if(adminRefreshPromise) return adminRefreshPromise;
+  const button=$('#admin-refresh');
+  setRefreshLoading(button,true);
+  updateAdminRefreshStatus('loading');
+  adminRefreshPromise=(async()=>{
+    await loadAdminNetwork();
+    const results=await Promise.allSettled([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]);
+    const rejected=results.find(result=>result.status==='rejected');
+    if(rejected) throw rejected.reason;
+    updateAdminRefreshStatus('live');
+    startNotificationPolling();
+    startMonitoringPolling();
+  })();
+  try { await adminRefreshPromise; }
+  catch(error) { updateAdminRefreshStatus('error'); throw error; }
+  finally { adminRefreshPromise=null; setRefreshLoading(button,false); }
+}
+async function refreshTableData() {
+  if(!isAdminView) return;
+  if(tableRefreshPromise) return tableRefreshPromise;
+  const button=$('#table-refresh');
+  setRefreshLoading(button,true);
+  updateTableRefreshStatus('loading');
+  tableRefreshPromise=loadAdminLeads();
+  try { await tableRefreshPromise; updateTableRefreshStatus('live'); }
+  catch(error) { updateTableRefreshStatus('error'); throw error; }
+  finally { tableRefreshPromise=null; setRefreshLoading(button,false); }
 }
 function renderNotifications(notifications=[], unreadCount=0) {
   const badge = $('#notification-badge');
@@ -262,7 +318,7 @@ async function loadAdminLeads({ silent=false }={}) {
     $('#today-leads').textContent = stats.today;
     $('#authorized-leads').textContent = stats.authorized;
     ['all','account','free','pending'].forEach(key=>{ $(`#category-count-${key}`).textContent=categories[key] || 0; });
-    renderLeads(); updateMonitoringStatus('live');
+    renderLeads(); updateMonitoringStatus('live'); updateTableRefreshStatus('live'); updateAdminRefreshStatus('live');
   } catch(error) {
     updateMonitoringStatus('error');
     if(!silent) throw error;
@@ -345,7 +401,7 @@ async function loadAdminNetwork() {
 }
 renderLeads();
 loadPortalSettings();
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); show('dashboard'); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
@@ -379,6 +435,7 @@ $('#sidebar-toggle').onclick = () => setSidebar(!document.body.classList.contain
 $('#workspace-toggle').onclick=event=>{ event.stopPropagation(); setWorkspaceMenu(!$('.workspace-switcher').classList.contains('open')); };
 $('#workspace-close').onclick=event=>{ event.stopPropagation(); setWorkspaceMenu(false); $('#workspace-toggle').focus(); };
 $('#workspace-menu').onclick=async event=>{ event.stopPropagation(); const option=event.target.closest('.workspace-option'); if(!option) return; option.disabled=true; try { const shouldCloseSidebar=matchMedia('(max-width:1100px)').matches; await applyAdminScope(option.dataset.projectId||'',option.dataset.gatewayId||''); if(shouldCloseSidebar) setSidebar(false); } catch(error){ alert(error.message); option.disabled=false; } };
+$('#admin-refresh').onclick=()=>refreshAdminData().catch(error=>alert(error.message));
 $('#notification-toggle').onclick = event => { event.stopPropagation(); setNotificationPanel(!$('#notification-panel').classList.contains('open')); };
 $('#notification-panel').onclick = event => event.stopPropagation();
 $('#notification-read-all').onclick = async () => { try { await api(`/api/admin/notifications/read${scopeQuery()}`, {}); await loadNotifications(); } catch (error) { alert(error.message); } };
@@ -433,6 +490,7 @@ $('#monitoring-range').addEventListener('click',event=>{ const button=event.targ
 $('#page-size').addEventListener('change',event=>{ adminTable.limit=Number(event.target.value)||10; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
 $('#page-prev').onclick=()=>{ if(adminTable.page<=1) return; adminTable.page-=1; loadAdminLeads().catch(error=>alert(error.message)); };
 $('#page-next').onclick=()=>{ if(adminTable.page>=adminTable.totalPages) return; adminTable.page+=1; loadAdminLeads().catch(error=>alert(error.message)); };
+$('#table-refresh').onclick=()=>refreshTableData().catch(error=>alert(error.message));
 $('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, histori monitoring, dan riwayat akses akan dihapus.' : `Perangkat, histori monitoring, dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
 $('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
 $('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const accountSsid=$('#setting-account-ssid').value.trim() || '@PERUMNET_WiFi', freeSsid=$('#setting-free-ssid').value.trim() || '@PERUMNET_FreeWiFi', title=$('#setting-title').value || 'Masuk ke internet cepat.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { accountSsid,freeSsid,welcomeTitle:title,welcomeText:copy,termsText:terms,limitedBandwidthKbps:bandwidth }); portalSettings={ ...portalSettings,account_ssid:accountSsid,free_ssid:freeSsid,default_ssid:accountSsid,welcome_title:title,welcome_text:copy,terms_text:terms,limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || accountSsid); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#account-profile-ssid').textContent=accountSsid; $('#free-profile-ssid').textContent=freeSsid; $('#preview-account-ssid').textContent=accountSsid; $('#preview-free-ssid').textContent=freeSsid; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });
