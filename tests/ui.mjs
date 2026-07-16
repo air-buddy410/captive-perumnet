@@ -18,6 +18,9 @@ assert.match(html, /class="portal-profile-card account"/, 'Admin harus menjelask
 assert.match(html, /class="portal-profile-card free"/, 'Admin harus menjelaskan profil portal free.');
 assert.match(html, /id="user-login-screen" class="login-page portal-modal"/, 'Login pelanggan harus memakai modal.');
 assert.match(html, /id="sidebar-toggle"/, 'Dashboard harus menyediakan tombol navigasi mobile.');
+assert.match(html, /id="workspace-toggle"[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"/, 'Kartu workspace harus menjadi tombol pemilih project dan gateway yang accessible.');
+assert.match(html, /id="workspace-menu"[^>]*aria-label="Pilih project atau gateway"/, 'Sidebar harus menyediakan menu pemilih jaringan yang nyata.');
+assert.match(html, /id="workspace-options"[^>]*role="menu"/, 'Pilihan workspace harus dirender sebagai menu interaktif.');
 assert.match(html, /rel="icon"[^>]*perumnet-favicon\.png/, 'Portal harus menggunakan favicon PerumNet.');
 assert.ok(favicon.length > 1000 && favicon.subarray(1,4).toString() === 'PNG', 'Aset favicon harus berupa PNG yang valid.');
 assert.match(html, /class="sidebar-brand brand brand-light" href="https:\/\/hotspot\.perumnet\.id"/, 'Logo sidebar harus kembali ke portal hotspot.');
@@ -40,6 +43,8 @@ assert.match(html, /data-tab="network"/, 'Dashboard harus menyediakan pengelolaa
 assert.match(html, /id="scope-project"/, 'Dashboard harus menyediakan filter project global.');
 assert.match(html, /id="scope-gateway"/, 'Dashboard harus menyediakan filter gateway global.');
 assert.match(html, /id="gateway-list"/, 'Dashboard harus menampilkan daftar identitas gateway.');
+assert.match(html, /id="portal-network-list"/, 'Dashboard harus menampilkan routing portal per jaringan gateway.');
+assert.match(html, /id="portal-routing-title">Routing Captive Portal/, 'Admin harus menjelaskan routing satu Auth Server URL.');
 assert.match(html, /id="forgot-password-screen" class="login-page portal-modal"/, 'Portal harus menyediakan pemulihan kata sandi melalui email.');
 assert.match(html, /id="reset-password-screen" class="login-page account-action-page"/, 'Tautan reset harus membuka halaman khusus di luar hotspot.');
 assert.match(html, /id="account-status-screen" class="success-page account-action-page"/, 'Verifikasi email harus membuka halaman status khusus.');
@@ -71,6 +76,11 @@ assert.match(app, /renderUserUsageChart/, 'UI harus merender penggunaan per peng
 assert.match(app, /category:'all'.*totalPages:1/, 'UI harus menyimpan state pagination dan kategori tabel.');
 assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus client harus dibatasi pada gateway yang tepat.');
 assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
+assert.match(app, /function renderPortalNetworkRoutes\(\)/, 'UI harus merender mapping Portal Akun dan Portal Free per jaringan.');
+assert.match(app, /\/api\/admin\/portal-networks/, 'Admin harus dapat menyimpan routing portal per gateway.');
+assert.match(app, /function renderWorkspaceMenu\(\)/, 'UI harus merender pilihan project dan gateway di sidebar.');
+assert.match(app, /async function applyAdminScope\(projectId='',gatewayId=''\)/, 'Dropdown sidebar dan filter utama harus memakai scope dashboard yang sama.');
+assert.match(app, /workspace-option/, 'UI harus menangani pilihan workspace dari menu sidebar.');
 assert.match(app, /\/api\/auth\/forgot-password/, 'UI harus dapat meminta email reset kata sandi.');
 assert.match(app, /\/api\/auth\/reset-password/, 'UI harus dapat menyimpan kata sandi baru.');
 assert.match(app, /showAccountStatus\('Email berhasil diverifikasi\.','Kembali ke jendela login WiFi/, 'Verifikasi email tidak boleh mengarahkan user ke form hotspot.');
@@ -79,6 +89,8 @@ assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpo
 assert.match(css, /\.notification-panel\.open/, 'Panel notifikasi harus memiliki state terbuka yang jelas.');
 assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif khusus.');
 assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
+assert.match(css, /\.portal-network-grid/, 'Routing jaringan harus memiliki layout responsif.');
+assert.match(css, /\.portal-route-form/, 'Kartu routing harus menyediakan form yang rapi.');
 assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');
 const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1880px}');
 const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:block;width:100%;min-width:0;max-width:100%');
@@ -86,6 +98,8 @@ const finalMobileTableReset = css.lastIndexOf('body.admin-view table{min-width:0
 assert.ok(Math.max(mobileGatewayTableReset,finalMobileTableReset) > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel monitoring.');
 assert.match(css, /body\.admin-view \.stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'Statistik mobile harus tampil tanpa carousel horizontal yang terpotong.');
 assert.match(css, /\.analytics-grid/, 'Panel monitoring harus memiliki layout grafik responsif.');
+assert.match(css, /\.workspace-switcher\.open \.workspace-menu/, 'Menu workspace harus memiliki state buka yang jelas.');
+assert.match(css, /\.workspace-option\.active/, 'Project atau gateway terpilih harus memiliki state visual aktif.');
 assert.match(css, /body\.admin-view \.analytics-card\{width:100%;min-width:0;max-width:100%/, 'Panel grafik mobile harus dibatasi pada lebar viewport.');
 
 console.log('Responsive UI contract: PASS');

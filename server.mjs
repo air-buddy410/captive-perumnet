@@ -34,6 +34,15 @@ db.exec(`
     location TEXT, model TEXT, created_at TEXT NOT NULL, last_seen_at TEXT,
     FOREIGN KEY(project_id) REFERENCES projects(id)
   );
+  CREATE TABLE IF NOT EXISTS portal_network_routes (
+    gateway_id TEXT NOT NULL, network_alias TEXT NOT NULL,
+    client_cidr TEXT, portal_mode TEXT NOT NULL DEFAULT 'account'
+      CHECK(portal_mode IN ('account','free')),
+    first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, configured_at TEXT,
+    PRIMARY KEY(gateway_id,network_alias),
+    FOREIGN KEY(gateway_id) REFERENCES gateways(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS idx_portal_network_cidr ON portal_network_routes(gateway_id,client_cidr);
   CREATE TABLE IF NOT EXISTS access_logs (
     id TEXT PRIMARY KEY, user_id TEXT, mac_address TEXT, client_ip TEXT,
     access_type TEXT NOT NULL CHECK(access_type IN ('high_speed','limited')),
@@ -232,6 +241,19 @@ function ssidFromGateway(value = {}) {
   }
   return null;
 }
+function networkAliasFromGateway(value = {}) {
+  const candidates = [value.network_alias, value.network, value.ssid, value.SSID, value.vlan_name, value.vlan];
+  for (const candidate of candidates) {
+    const alias = String(candidate || '').trim();
+    if (alias) return alias.slice(0, 128);
+  }
+  return null;
+}
+function clientCidr(value) {
+  const match = String(value || '').trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/);
+  if (!match || match.slice(1).some(part => Number(part) > 255)) return null;
+  return `${match[1]}.${match[2]}.${match[3]}.0/24`;
+}
 function contextFrom(value = {}) {
   return {
     client_mac: value.client_mac || value.mac || null,
@@ -239,6 +261,8 @@ function contextFrom(value = {}) {
     // Reyee Gateway may populate `ssid` with a network alias such as VLAN10.
     // Prefer explicit WLAN parameters and never persist that alias as the SSID.
     ssid: ssidFromGateway(value),
+    network_alias: networkAliasFromGateway(value),
+    network_slot: String(value.slot_num || '').trim().slice(0, 32) || null,
     login_url: value.login_url || null,
     logout_url: value.logout_url || null,
     orig_url: value.orig_url || value.url || null,
@@ -268,9 +292,53 @@ function ensureGateway(context = {}) {
       model=COALESCE(gateways.model,excluded.model)`).run(gatewayId, suppliedName || defaultName, null, suppliedModel, now, now);
   return gatewayId;
 }
+function observePortalNetwork(context = {}) {
+  const gatewayId = ensureGateway(context);
+  const alias = networkAliasFromGateway(context);
+  const cidr = clientCidr(context.client_ip);
+  const networkKey = alias || cidr;
+  if (!networkKey || gatewayId === 'unassigned') return null;
+  const now = new Date().toISOString();
+  const existing = db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkKey);
+  if (existing) {
+    db.prepare('UPDATE portal_network_routes SET client_cidr=COALESCE(?,client_cidr),last_seen_at=? WHERE gateway_id=? AND network_alias=?')
+      .run(cidr, now, gatewayId, networkKey);
+    return { ...existing, client_cidr:cidr || existing.client_cidr, last_seen_at:now };
+  }
+  const inherited = cidr ? db.prepare(`SELECT portal_mode,configured_at FROM portal_network_routes
+    WHERE gateway_id=? AND client_cidr=? ORDER BY configured_at IS NOT NULL DESC,last_seen_at DESC LIMIT 1`).get(gatewayId, cidr) : null;
+  const portalMode = inherited?.portal_mode || 'account';
+  db.prepare(`INSERT INTO portal_network_routes
+    (gateway_id,network_alias,client_cidr,portal_mode,first_seen_at,last_seen_at,configured_at)
+    VALUES (?,?,?,?,?,?,?)`).run(gatewayId, networkKey, cidr, portalMode, now, now, inherited?.configured_at || null);
+  return db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkKey);
+}
+function portalRouteForContext(context = {}, observe = false) {
+  if (observe) return observePortalNetwork(context);
+  const gatewayId = gatewayKey(context);
+  const alias = networkAliasFromGateway(context);
+  const cidr = clientCidr(context.client_ip);
+  if (gatewayId === 'unassigned' || (!alias && !cidr)) return null;
+  return db.prepare(`SELECT * FROM portal_network_routes WHERE gateway_id=?
+    AND (network_alias=? OR (? IS NOT NULL AND client_cidr=?))
+    ORDER BY network_alias=? DESC,configured_at IS NOT NULL DESC,last_seen_at DESC LIMIT 1`)
+    .get(gatewayId, alias || '', cidr, cidr, alias || '');
+}
+function portalModeForCallback(context = {}) {
+  const gatewayId = gatewayKey(context);
+  const mac = String(context.client_mac || '').trim().toLowerCase();
+  if (gatewayId !== 'unassigned' && mac) {
+    const session = db.prepare(`SELECT access_type FROM captive_sessions
+      WHERE gateway_id=? AND mac_address=? ORDER BY created_at DESC LIMIT 1`).get(gatewayId, mac);
+    if (session?.access_type === 'limited') return 'free';
+    if (session?.access_type === 'high_speed') return 'account';
+  }
+  return portalRouteForContext(context)?.portal_mode || 'account';
+}
 function trackClient(context) {
   const mac = String(context.client_mac || '').trim().toLowerCase();
   const gatewayId = ensureGateway(context);
+  observePortalNetwork({ ...context, gw_id:gatewayId });
   if (!mac) return { gatewayId, mac:null };
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO clients (mac_address,client_ip,ssid,gateway_id,first_seen_at,last_seen_at)
@@ -810,7 +878,18 @@ async function api(req, res, url) {
     if (!user.is_verified) return json(res, 403, { error: 'Email belum terverifikasi. Periksa inbox Anda.' });
     const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email, user.id), user: { name: user.full_name, email: user.email } });
   }
-  if (route === '/api/captive/limited' && req.method === 'POST') { const { context } = await body(req); const captive = contextFrom(context); const setting = db.prepare('SELECT limited_bandwidth_kbps FROM portal_settings WHERE id=1').get(); writeLog(null, captive, 'limited'); const authorization = authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`); return json(res, 200, { bandwidthKbps:setting.limited_bandwidth_kbps, sessionHours:sessionHoursFor('limited'), authorization }); }
+  if (route === '/api/captive/limited' && req.method === 'POST') {
+    const { context } = await body(req);
+    const captive = contextFrom(context);
+    const networkRoute = portalRouteForContext(captive, true);
+    if (config.reyeeMode === 'redirect' && captive.client_mac && networkRoute?.portal_mode !== 'free') {
+      return json(res, 403, { error:'One-click hanya tersedia pada jaringan FreeWiFi. Sambungkan perangkat ke SSID gratis lalu coba kembali.' });
+    }
+    const setting = db.prepare('SELECT limited_bandwidth_kbps FROM portal_settings WHERE id=1').get();
+    writeLog(null, captive, 'limited');
+    const authorization = authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`);
+    return json(res, 200, { bandwidthKbps:setting.limited_bandwidth_kbps, sessionHours:sessionHoursFor('limited'), authorization });
+  }
   if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true, email:config.adminEmail }, { 'set-cookie': adminCookie(`${encodedEmail}.${sig}`) }); }
   if (route === '/api/admin/session' && req.method === 'GET') { if (!adminSession(req)) return json(res, 401, { error: 'Sesi admin diperlukan.' }); return json(res, 200, { ok:true, email:config.adminEmail }); }
   if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
@@ -827,10 +906,15 @@ async function api(req, res, url) {
       FROM gateways g JOIN projects p ON p.id=g.project_id
       LEFT JOIN clients c ON c.gateway_id=g.id
       GROUP BY g.id ORDER BY CASE WHEN g.id='unassigned' THEN 1 ELSE 0 END,p.name,g.name`).all();
+    const portalNetworks = db.prepare(`SELECT n.gateway_id,n.network_alias,n.client_cidr,n.portal_mode,
+      n.first_seen_at,n.last_seen_at,n.configured_at,g.name AS gateway_name,g.project_id,p.name AS project_name
+      FROM portal_network_routes n JOIN gateways g ON g.id=n.gateway_id JOIN projects p ON p.id=g.project_id
+      ORDER BY p.name,g.name,n.network_alias`).all();
     const offlineDeadline = new Date(Date.now() - (Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20) * 60 * 1000).toISOString();
     return json(res, 200, {
       projects,
-      gateways:gateways.map(gateway => ({ ...gateway, status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline' }))
+      gateways:gateways.map(gateway => ({ ...gateway, status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline' })),
+      portalNetworks
     });
   }
   if (route === '/api/admin/monitoring' && req.method === 'GET') {
@@ -865,6 +949,22 @@ async function api(req, res, url) {
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,name=excluded.name,location=excluded.location,model=excluded.model`)
       .run(gatewayId, projectId, name, location, model, createdAt, current?.last_seen_at || null);
     return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
+  }
+  if (route === '/api/admin/portal-networks' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const gatewayId = gatewayKey(payload.gatewayId);
+    const networkAlias = String(payload.networkAlias || '').trim().slice(0,128);
+    const portalMode = payload.portalMode === 'free' ? 'free' : payload.portalMode === 'account' ? 'account' : '';
+    if (gatewayId === 'unassigned' || !networkAlias || !portalMode) return json(res, 400, { error:'Gateway, jaringan, dan jenis portal wajib dipilih.' });
+    const routeRecord = db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkAlias);
+    if (!routeRecord) return json(res, 404, { error:'Jaringan belum terdeteksi pada gateway ini.' });
+    const now = new Date().toISOString();
+    db.prepare('UPDATE portal_network_routes SET portal_mode=?,configured_at=? WHERE gateway_id=? AND network_alias=?')
+      .run(portalMode, now, gatewayId, networkAlias);
+    if (routeRecord.client_cidr) db.prepare(`UPDATE portal_network_routes SET portal_mode=?,configured_at=?
+      WHERE gateway_id=? AND client_cidr=?`).run(portalMode, now, gatewayId, routeRecord.client_cidr);
+    return json(res, 200, { network:db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkAlias) });
   }
   if (route === '/api/admin/export.csv' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
@@ -1037,7 +1137,14 @@ const server = createServer(async (req, res) => {
     const freeWifiDog = normalizedPath === '/free/auth/wifidogAuth' || normalizedPath.startsWith('/free/auth/wifidogAuth/');
     const wifiDogPath = freeWifiDog ? normalizedPath.slice('/free'.length) : normalizedPath;
     if (wifiDogPath === '/auth/wifidogAuth/login/' || wifiDogPath === '/auth/wifidogAuth/login') {
-      trackClient(contextFrom(Object.fromEntries(url.searchParams.entries())));
+      const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
+      const networkRoute = portalRouteForContext(context, true);
+      trackClient(context);
+      if (!freeWifiDog && networkRoute?.portal_mode === 'free') {
+        const freeLogin = new URL(`/free${wifiDogPath}`, config.baseUrl);
+        freeLogin.search = url.search;
+        res.writeHead(302, { location:freeLogin.toString(), 'cache-control':'no-store' }); return res.end();
+      }
       res.writeHead(200, { 'content-type': mime['.html'] }); return res.end(await readFile(join(root, 'index.html')));
     }
     if (wifiDogPath === '/auth/wifidogAuth/ping/' || wifiDogPath === '/auth/wifidogAuth/ping') {
@@ -1049,7 +1156,9 @@ const server = createServer(async (req, res) => {
       return text(res, 200, confirmWifiDogSession(url) ? 'Auth: 1\n' : 'Auth: 0\n');
     }
     if (wifiDogPath === '/auth/wifidogAuth/portal/' || wifiDogPath === '/auth/wifidogAuth/portal') {
-      res.writeHead(302, { location: `${config.baseUrl}${freeWifiDog ? '/free' : '/'}?connected=1` }); return res.end();
+      const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
+      const freeSession = freeWifiDog || portalModeForCallback(context) === 'free';
+      res.writeHead(302, { location: `${config.baseUrl}${freeSession ? '/free' : '/'}?connected=1` }); return res.end();
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
     let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname === '/free' || url.pathname === '/free/') ? '/index.html' : url.pathname;

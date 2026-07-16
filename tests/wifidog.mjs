@@ -35,6 +35,24 @@ try {
 
   const mac = '02:00:00:00:10:01';
   const context = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac, ip:'10.1.10.10', ssid:'VLAN10' };
+  const defaultLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10`, { redirect:'manual' });
+  assert(defaultLogin.status === 200, 'Jaringan baru harus aman dengan fallback Portal Akun.');
+  const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:'admin-test@example.com', password:'admin-test-password' })
+  });
+  const adminCookie = adminLogin.headers.get('set-cookie');
+  assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  const discoveredNetworkResponse = await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } });
+  const discoveredNetwork = await discoveredNetworkResponse.json();
+  assert(discoveredNetwork.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_alias==='VLAN10' && route.portal_mode==='account'), 'Redirect WiFiDog harus menemukan alias VLAN dengan fallback Portal Akun.');
+  const mapFreeNetwork = await fetch(`${baseUrl}/api/admin/portal-networks`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'test-gateway',networkAlias:'VLAN10',portalMode:'free' })
+  });
+  assert(mapFreeNetwork.status === 200, 'Admin harus dapat memetakan VLAN ke Portal Free.');
+  const dynamicFreeLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10`, { redirect:'manual' });
+  assert(dynamicFreeLogin.status === 302 && new URL(dynamicFreeLogin.headers.get('location')).pathname === '/free/auth/wifidogAuth/login/', 'Satu Auth Server URL harus otomatis mengarahkan VLAN Free ke halaman /free.');
   const freePageResponse = await fetch(`${baseUrl}/free?gw_id=test-gateway&mac=${encodeURIComponent(mac)}`);
   assert(freePageResponse.status === 200 && (await freePageResponse.text()).includes('id="free-screen"'), 'Route /free harus menyajikan portal one-click.');
   const freeLoginResponse = await fetch(`${baseUrl}/free/auth/wifidogAuth/login/?gw_id=test-gateway&mac=${encodeURIComponent(mac)}&ip=10.1.10.10`);
@@ -57,8 +75,8 @@ try {
   assert(wrongMac.body === 'Auth: 0\n', 'Token harus ditolak untuk MAC berbeda.');
   const login = await request(`/free/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
   assert(login.body === 'Auth: 1\n', 'Token valid harus mengaktifkan internet.');
-  const freePortalCallback = await fetch(`${baseUrl}/free/auth/wifidogAuth/portal/?gw_id=test-gateway&mac=${encodeURIComponent(mac)}&token=${token}`, { redirect:'manual' });
-  assert(freePortalCallback.status === 302 && new URL(freePortalCallback.headers.get('location')).pathname === '/free', 'Callback portal limited harus kembali ke /free.');
+  const freePortalCallback = await fetch(`${baseUrl}/auth/wifidogAuth/portal/?gw_id=test-gateway&mac=${encodeURIComponent(mac)}`, { redirect:'manual' });
+  assert(freePortalCallback.status === 302 && new URL(freePortalCallback.headers.get('location')).pathname === '/free', 'Callback global harus mengenali session limited dan kembali ke /free.');
   const queryAfter = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryAfter.body === 'Auth: 1\n', 'Query session aktif harus diizinkan.');
   const counters = await request(`/free/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}&incoming=100000&outgoing=50000`);
@@ -75,7 +93,13 @@ try {
   assert(queryLoggedOut.body === 'Auth: 0\n', 'Client logout tidak boleh tetap aktif.');
 
   const accountMac = '02:00:00:00:20:01';
-  const accountContext = { ...context, mac:accountMac, ip:'10.1.10.20', wlan_name:'@PERUMNET_WiFi' };
+  const accountContext = { ...context, mac:accountMac, ip:'10.1.30.20', ssid:'VLAN30', wlan_name:'@PERUMNET_WiFi' };
+  const accountPortalResponse = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(accountMac)}&ip=10.1.30.20&ssid=VLAN30`, { redirect:'manual' });
+  assert(accountPortalResponse.status === 200, 'VLAN akun harus tetap membuka portal root dari URL eksternal yang sama.');
+  const blockedOneClick = await fetch(`${baseUrl}/api/captive/limited`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:accountContext })
+  });
+  assert(blockedOneClick.status === 403, 'One-click harus ditolak dari VLAN akun agar tidak melewati formulir data.');
   const registerResponse = await fetch(`${baseUrl}/api/auth/register`, {
     method:'POST', headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ fullName:'WiFiDog Test', email:'wifidog-test@example.com', phone:'081234567890', address:'Test', password:'test-password-123', consent:true })
@@ -120,19 +144,15 @@ try {
   const accountGatewayUrl = new URL(accountLogin.authorization.url);
   const accountToken = accountGatewayUrl.searchParams.get('token');
   assert(loginResponse.status === 200 && accountLogin.authorization.profile === 'high_speed', 'Login akun terverifikasi harus membuat token High Speed.');
-  const accountAuth = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
+  const accountAuth = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.30.20&mac=${accountMac}&token=${accountToken}`);
   assert(accountAuth.body === 'Auth: 1\n', 'Gateway harus menerima token login akun terverifikasi.');
-  const accountCounterWithoutGateway = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}&incoming=250000&outgoing=125000`);
+  const accountPortalCallback = await fetch(`${baseUrl}/auth/wifidogAuth/portal/?gw_id=test-gateway&mac=${encodeURIComponent(accountMac)}`, { redirect:'manual' });
+  assert(accountPortalCallback.status === 302 && new URL(accountPortalCallback.headers.get('location')).pathname === '/', 'Callback global harus mengembalikan session akun ke portal root.');
+  const accountCounterWithoutGateway = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.30.20&mac=${accountMac}&token=${accountToken}&incoming=250000&outgoing=125000`);
   assert(accountCounterWithoutGateway.body === 'Auth: 1\n', 'Callback token tetap harus memakai gateway sesi jika gw_id tidak dikirim ulang.');
   await new Promise(resolve => setTimeout(resolve, 40));
-  const accountCounterUpdated = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}&incoming=350000&outgoing=175000`);
+  const accountCounterUpdated = await request(`/auth/wifidogAuth/auth/?stage=counters&ip=10.1.30.20&mac=${accountMac}&token=${accountToken}&incoming=350000&outgoing=175000`);
   assert(accountCounterUpdated.body === 'Auth: 1\n', 'Counter akun harus dapat diperbarui tanpa gw_id ketika token membawa identitas gateway.');
-  const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
-    method:'POST', headers:{ 'content-type':'application/json' },
-    body:JSON.stringify({ email:'admin-test@example.com', password:'admin-test-password' })
-  });
-  const adminCookie = adminLogin.headers.get('set-cookie');
-  assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
   const monitoringResponse = await fetch(`${baseUrl}/api/admin/monitoring?range=1h`, { headers:{ cookie:adminCookie } });
   const monitoring = await monitoringResponse.json();
   assert(monitoringResponse.status === 200 && monitoring.has_history && monitoring.sample_count >= 4, 'Monitoring harus membaca histori callback counter WiFiDog.');
@@ -147,6 +167,12 @@ try {
   const updatedPortalSettings = await (await fetch(`${baseUrl}/api/settings`)).json();
   assert(updatedPortalSettings.account_ssid === '@PERUMNET_WiFi' && updatedPortalSettings.free_ssid === '@PERUMNET_FreeWiFi', 'API settings harus mengembalikan dua SSID portal yang tepat.');
   const secondGatewayContext = { ...context, gw_id:'branch-gateway', ip:'10.2.10.10' };
+  await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
+  const mapSecondGatewayFree = await fetch(`${baseUrl}/api/admin/portal-networks`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'branch-gateway',networkAlias:'VLAN10',portalMode:'free' })
+  });
+  assert(mapSecondGatewayFree.status === 200, 'Routing portal harus dapat diatur berbeda pada gateway kedua.');
   const secondGatewayResponse = await fetch(`${baseUrl}/api/captive/limited`, {
     method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:secondGatewayContext })
   });
@@ -154,6 +180,7 @@ try {
   const networkResponse = await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } });
   const network = await networkResponse.json();
   assert(networkResponse.status === 200 && network.gateways.some(gateway=>gateway.id==='test-gateway') && network.gateways.some(gateway=>gateway.id==='branch-gateway'), 'Gateway harus ditemukan otomatis dari gw_id Ruijie.');
+  assert(network.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_alias==='VLAN10' && route.portal_mode==='free'), 'API network harus mengembalikan routing portal per gateway.');
   const projectResponse = await fetch(`${baseUrl}/api/admin/projects`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ name:'Cabang Tes',location:'Denpasar' })
   });
@@ -208,9 +235,9 @@ try {
   assert(deleteResponse.status === 200 && deleted.deletedAccount && deleted.gatewayAuthorizationRevoked, 'Hapus admin harus menghapus akun dan mencabut otorisasi gateway.');
   const monitoringAfterDelete = await (await fetch(`${baseUrl}/api/admin/monitoring?range=1h`, { headers:{ cookie:adminCookie } })).json();
   assert(!monitoringAfterDelete.users.some(item=>item.detail==='wifidog-test@example.com'), 'Hapus akun harus ikut menghapus histori monitoring pengguna tersebut.');
-  const revokedCounter = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}&token=${accountToken}`);
+  const revokedCounter = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.30.20&mac=${accountMac}&token=${accountToken}`);
   assert(revokedCounter.body === 'Auth: 0\n', 'Token lama harus ditolak setelah data dihapus admin.');
-  const revokedQuery = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.20&mac=${accountMac}`);
+  const revokedQuery = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.30.20&mac=${accountMac}`);
   assert(revokedQuery.body === 'Auth: 0\n', 'MAC lama harus tidak terotorisasi setelah data dihapus admin.');
   const clientsAfterDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
   const deletedClientList = await clientsAfterDelete.json();

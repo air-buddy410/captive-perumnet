@@ -51,7 +51,7 @@ async function loadPortalSettings() {
   } catch { setWifiName(gatewaySsid || (isFreeView ? '@PERUMNET_FreeWiFi' : '@PERUMNET_WiFi')); }
 }
 const leads = [];
-let networkCatalog = { projects:[], gateways:[] };
+let networkCatalog = { projects:[], gateways:[], portalNetworks:[] };
 const adminScope = { projectId:'', gatewayId:'' };
 const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
 const adminMonitoring = { range:'24h', loading:false };
@@ -70,7 +70,8 @@ function updateScopeIdentity() {
   $('#scope-title').textContent=gateway?.name || project?.name || 'Semua jaringan';
   $('#scope-subtitle').textContent=gateway ? `${project?.name || gateway.project_name} · ${gateway.location || 'Lokasi belum diisi'}` : project ? `Ringkasan seluruh gateway di ${project.name}` : 'Ringkasan gabungan seluruh project dan gateway';
   $('#workspace-name').textContent=gateway?.name || project?.name || 'Semua Project';
-  $('#workspace-context').textContent=gateway ? (gateway.project_name || project?.name || 'Gateway aktif') : project ? 'Seluruh gateway project' : 'Seluruh gateway';
+  $('#workspace-context').textContent=gateway ? (gateway.project_name || project?.name || 'Gateway aktif') : project ? `${project.gateway_count || 0} gateway` : `${networkCatalog.projects.length} project · ${visibleGateways().length} gateway`;
+  $('#workspace-toggle .avatar').textContent=gateway ? 'GW' : project ? project.name.split(/\s+/).slice(0,2).map(word=>word[0]).join('').toUpperCase() : 'PN';
 }
 function show(screen) { Object.values(screens).forEach(el => el.classList.remove('active')); screens[screen].classList.add('active'); document.body.classList.toggle('modal-open', screens[screen].classList.contains('portal-modal')); if (!screens[screen].classList.contains('portal-modal')) window.scrollTo(0,0); }
 function showAccessChoice() { $('#portal-screen').classList.remove('show-form'); show('portal'); }
@@ -273,9 +274,33 @@ function renderLeads() {
 }
 function projectOptions(selected='') { return networkCatalog.projects.map(project=>`<option value="${escapeHtml(project.id)}" ${project.id===selected?'selected':''}>${escapeHtml(project.name)}</option>`).join(''); }
 function visibleGateways() { return networkCatalog.gateways.filter(gateway=>gateway.id!=='unassigned' || Number(gateway.client_count)>0); }
+function workspaceInitials(value='') { return String(value).trim().split(/\s+/).slice(0,2).map(word=>word[0]).join('').toUpperCase() || 'PN'; }
+function renderWorkspaceMenu() {
+  const allActive=!adminScope.projectId && !adminScope.gatewayId;
+  const allOption=`<button class="workspace-option ${allActive?'active':''}" type="button" role="menuitemradio" aria-checked="${allActive}" data-project-id="" data-gateway-id=""><span class="workspace-option-icon">ALL</span><span class="workspace-option-copy"><b>Semua jaringan</b><small>${networkCatalog.projects.length} project · ${visibleGateways().length} gateway</small></span><span class="workspace-check">✓</span></button>`;
+  const projects=networkCatalog.projects.map(project=>{
+    const projectActive=adminScope.projectId===project.id && !adminScope.gatewayId;
+    const projectGateways=visibleGateways().filter(gateway=>gateway.project_id===project.id);
+    const projectOption=`<button class="workspace-option ${projectActive?'active':''}" type="button" role="menuitemradio" aria-checked="${projectActive}" data-project-id="${escapeHtml(project.id)}" data-gateway-id=""><span class="workspace-option-icon">${escapeHtml(workspaceInitials(project.name))}</span><span class="workspace-option-copy"><b>${escapeHtml(project.name)}</b><small>${projectGateways.length} gateway${project.location?` · ${escapeHtml(project.location)}`:''}</small></span><span class="workspace-check">✓</span></button>`;
+    const gatewayOptions=projectGateways.map(gateway=>{ const active=adminScope.gatewayId===gateway.id; return `<button class="workspace-option gateway ${gateway.status==='online'?'online':''} ${active?'active':''}" type="button" role="menuitemradio" aria-checked="${active}" data-project-id="${escapeHtml(project.id)}" data-gateway-id="${escapeHtml(gateway.id)}"><span class="workspace-option-icon"><i></i></span><span class="workspace-option-copy"><b>${escapeHtml(gateway.name)}</b><small>${gateway.status==='online'?'Online':'Offline'} · ${gateway.client_count||0} perangkat</small></span><span class="workspace-check">✓</span></button>`; }).join('');
+    return `<div class="workspace-project-group">${projectOption}${gatewayOptions}</div>`;
+  }).join('');
+  $('#workspace-options').innerHTML=allOption+projects;
+}
 function renderGatewayCards() {
   const gateways=visibleGateways();
   $('#gateway-list').innerHTML=gateways.length ? gateways.map(gateway=>`<article class="gateway-card ${gateway.status}"><header><div><span class="gateway-status"><i></i>${gateway.status==='online'?'Online':'Offline'}</span><h3>${escapeHtml(gateway.name)}</h3><code>${escapeHtml(gateway.id)}</code></div><span class="gateway-client-count"><b>${gateway.client_count || 0}</b><small>perangkat</small></span></header><form class="gateway-form" data-gateway-id="${escapeHtml(gateway.id)}"><label>Project<select name="projectId">${projectOptions(gateway.project_id)}</select></label><label>Nama gateway<input name="name" value="${escapeHtml(gateway.name)}" placeholder="Nama gateway" required /></label><div class="gateway-form-grid"><label>Lokasi<input name="location" value="${escapeHtml(gateway.location || '')}" placeholder="Lokasi pemasangan" /></label><label>Model<input name="model" value="${escapeHtml(gateway.model || '')}" placeholder="Contoh: RG-EG105G-P-V3" /></label></div><div class="gateway-card-footer"><span>Terakhir aktif: <b>${escapeHtml(relativeTime(gateway.last_seen_at))}</b></span><button type="submit">Simpan identitas</button></div><p class="gateway-feedback inline-feedback" role="status"></p></form></article>`).join('') : '<div class="gateway-empty">Gateway akan muncul otomatis setelah menerima koneksi Ruijie.</div>';
+}
+function renderPortalNetworkRoutes() {
+  const routes=networkCatalog.portalNetworks || [];
+  const accountSsid=portalSettings.account_ssid || '@PERUMNET_WiFi';
+  const freeSsid=portalSettings.free_ssid || '@PERUMNET_FreeWiFi';
+  $('#portal-network-list').innerHTML=routes.length ? routes.map(route=>{
+    const isFree=route.portal_mode==='free';
+    const portalLabel=isFree?'Portal Free':'Portal Akun';
+    const ssid=isFree?freeSsid:accountSsid;
+    return `<article class="portal-network-card ${isFree?'free':'account'}"><header><span class="portal-route-icon">${isFree?'FR':'AC'}</span><div><small>${escapeHtml(route.project_name)} · ${escapeHtml(route.gateway_name)}</small><h4>${escapeHtml(route.network_alias)}</h4></div><span class="portal-route-badge">${portalLabel}</span></header><div class="portal-route-meta"><span><small>Subnet terdeteksi</small><b>${escapeHtml(route.client_cidr || 'Belum tersedia')}</b></span><span><small>SSID ditampilkan</small><b>${escapeHtml(ssid)}</b></span><span><small>Terakhir terlihat</small><b>${escapeHtml(relativeTime(route.last_seen_at))}</b></span></div><form class="portal-route-form" data-gateway-id="${escapeHtml(route.gateway_id)}" data-network-alias="${escapeHtml(route.network_alias)}"><label>Jenis portal<select name="portalMode"><option value="account" ${isFree?'':'selected'}>Portal Akun · Login/Daftar</option><option value="free" ${isFree?'selected':''}>Portal Free · One Click</option></select></label><button type="submit">Simpan routing</button><p class="inline-feedback portal-route-feedback" role="status"></p></form></article>`;
+  }).join('') : '<div class="gateway-empty">Jaringan akan muncul setelah menerima redirect WiFiDog dari Ruijie.</div>';
 }
 function renderScopeOptions() {
   const projectSelect=$('#scope-project'), gatewaySelect=$('#scope-gateway');
@@ -286,10 +311,11 @@ function renderScopeOptions() {
   if (!availableGateways.some(gateway=>gateway.id===adminScope.gatewayId)) adminScope.gatewayId='';
   gatewaySelect.value=adminScope.gatewayId;
   updateScopeIdentity();
+  renderWorkspaceMenu();
 }
 async function loadAdminNetwork() {
   networkCatalog=await api('/api/admin/network');
-  renderScopeOptions(); renderGatewayCards();
+  renderScopeOptions(); renderGatewayCards(); renderPortalNetworkRoutes();
   $('#network-project-total').textContent=networkCatalog.projects.length;
   $('#network-gateway-total').textContent=visibleGateways().length;
   $('#network-online-total').textContent=networkCatalog.gateways.filter(gateway=>gateway.status==='online').length;
@@ -316,18 +342,32 @@ $('#resend-verification').onclick = async e => { const feedback=$('#verification
 $('#browse-button').onclick = () => { clearInterval(redirectTimer); location.assign(destinationUrl); };
 $('#admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#access-admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#back-portal').onclick = () => location.assign('/');
 $('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
-function setSidebar(open) { document.body.classList.toggle('sidebar-open',open); $('#sidebar-toggle').setAttribute('aria-expanded',String(open)); }
+function setWorkspaceMenu(open) { $('.workspace-switcher').classList.toggle('open',open); $('#workspace-toggle').setAttribute('aria-expanded',String(open)); }
+async function applyAdminScope(projectId='',gatewayId='') {
+  const gateway=networkCatalog.gateways.find(item=>item.id===gatewayId);
+  adminScope.gatewayId=gateway?.id || '';
+  adminScope.projectId=gateway?.project_id || projectId;
+  adminTable.page=1;
+  renderScopeOptions();
+  setWorkspaceMenu(false);
+  await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]);
+}
+function setSidebar(open) { document.body.classList.toggle('sidebar-open',open); $('#sidebar-toggle').setAttribute('aria-expanded',String(open)); if(!open) setWorkspaceMenu(false); }
 $('#sidebar-toggle').onclick = () => setSidebar(!document.body.classList.contains('sidebar-open')); $('#sidebar-backdrop').onclick = () => setSidebar(false);
+$('#workspace-toggle').onclick=event=>{ event.stopPropagation(); setWorkspaceMenu(!$('.workspace-switcher').classList.contains('open')); };
+$('#workspace-close').onclick=event=>{ event.stopPropagation(); setWorkspaceMenu(false); $('#workspace-toggle').focus(); };
+$('#workspace-menu').onclick=async event=>{ event.stopPropagation(); const option=event.target.closest('.workspace-option'); if(!option) return; option.disabled=true; try { const shouldCloseSidebar=matchMedia('(max-width:1100px)').matches; await applyAdminScope(option.dataset.projectId||'',option.dataset.gatewayId||''); if(shouldCloseSidebar) setSidebar(false); } catch(error){ alert(error.message); option.disabled=false; } };
 $('#notification-toggle').onclick = event => { event.stopPropagation(); setNotificationPanel(!$('#notification-panel').classList.contains('open')); };
 $('#notification-panel').onclick = event => event.stopPropagation();
 $('#notification-read-all').onclick = async () => { try { await api(`/api/admin/notifications/read${scopeQuery()}`, {}); await loadNotifications(); } catch (error) { alert(error.message); } };
-document.addEventListener('click', () => setNotificationPanel(false));
+document.addEventListener('click', () => { setNotificationPanel(false); setWorkspaceMenu(false); });
 document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true })]); setNotificationPanel(false); setSidebar(false); });
-document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
-$('#scope-project').addEventListener('change',async event=>{ adminScope.projectId=event.target.value; adminScope.gatewayId=''; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); } catch(error){ alert(error.message); } });
-$('#scope-gateway').addEventListener('change',async event=>{ adminScope.gatewayId=event.target.value; const gateway=selectedGateway(); if(gateway) adminScope.projectId=gateway.project_id; adminTable.page=1; renderScopeOptions(); try { await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); } catch(error){ alert(error.message); } });
+document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('.workspace-switcher').classList.contains('open')) setWorkspaceMenu(false); else if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
+$('#scope-project').addEventListener('change',event=>applyAdminScope(event.target.value,'').catch(error=>alert(error.message)));
+$('#scope-gateway').addEventListener('change',event=>applyAdminScope(adminScope.projectId,event.target.value).catch(error=>alert(error.message)));
 $('#project-form').addEventListener('submit',async event=>{ event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button'),feedback=$('#project-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent=''; try { await api('/api/admin/projects',{ name:data.get('name'),location:data.get('location') }); form.reset(); feedback.textContent='Project berhasil ditambahkan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
 $('#gateway-list').addEventListener('submit',async event=>{ const form=event.target.closest('.gateway-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.gateway-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent='Menyimpan…'; try { await api('/api/admin/gateways',{ gatewayId:form.dataset.gatewayId,projectId:data.get('projectId'),name:data.get('name'),location:data.get('location'),model:data.get('model') }); feedback.textContent='Identitas gateway tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); await loadAdminLeads(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
+$('#portal-network-list').addEventListener('submit',async event=>{ const form=event.target.closest('.portal-route-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.portal-route-feedback'),portalMode=new FormData(form).get('portalMode'); button.disabled=true; feedback.textContent='Menyimpan routing…'; feedback.classList.remove('success'); try { await api('/api/admin/portal-networks',{ gatewayId:form.dataset.gatewayId,networkAlias:form.dataset.networkAlias,portalMode }); feedback.textContent='Routing portal tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; } finally { button.disabled=false; } });
 $('#search-input').addEventListener('input', event => { clearTimeout(searchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; searchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
 $('#category-filter').addEventListener('click',event=>{ const button=event.target.closest('[data-category]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#category-filter [data-category]').forEach(item=>item.classList.toggle('active',item===button)); adminTable.category=button.dataset.category; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
 $('#monitoring-range').addEventListener('click',event=>{ const button=event.target.closest('[data-range]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#monitoring-range [data-range]').forEach(item=>item.classList.toggle('active',item===button)); adminMonitoring.range=button.dataset.range; loadAdminMonitoring().catch(error=>alert(error.message)); });
