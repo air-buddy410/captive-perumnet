@@ -43,6 +43,9 @@ assert.match(html, /data-tab="network"/, 'Dashboard harus menyediakan pengelolaa
 assert.match(html, /id="scope-project"/, 'Dashboard harus menyediakan filter project global.');
 assert.match(html, /id="scope-gateway"/, 'Dashboard harus menyediakan filter gateway global.');
 assert.match(html, /id="gateway-list"/, 'Dashboard harus menampilkan daftar identitas gateway.');
+assert.match(html, /id="blocked-gateway-list"/, 'Dashboard harus menampilkan gateway yang diblokir.');
+assert.match(html, /id="gateway-review-screen"/, 'Client gateway pending harus menerima halaman verifikasi yang jelas.');
+assert.match(html, /id="network-pending-total"/, 'Dashboard harus menampilkan jumlah gateway pending.');
 assert.match(html, /id="portal-network-list"/, 'Dashboard harus menampilkan routing portal per jaringan gateway.');
 assert.match(html, /id="portal-routing-title">Routing Captive Portal/, 'Admin harus menjelaskan routing satu Auth Server URL.');
 assert.match(html, /id="forgot-password-screen" class="login-page portal-modal"/, 'Portal harus menyediakan pemulihan kata sandi melalui email.');
@@ -78,6 +81,9 @@ assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus clien
 assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
 assert.match(app, /function renderPortalNetworkRoutes\(\)/, 'UI harus merender mapping Portal Akun dan Portal Free per jaringan.');
 assert.match(app, /\/api\/admin\/portal-networks/, 'Admin harus dapat menyimpan routing portal per gateway.');
+assert.match(app, /\/api\/admin\/gateways\/approval/, 'Admin harus dapat menyetujui gateway secara eksplisit.');
+assert.match(app, /\/api\/admin\/gateway-blocks/, 'Admin harus dapat membuka blokir gateway dengan aman.');
+assert.match(app, /api\('\/api\/admin\/gateways',\{ gatewayId \},'DELETE'\)/, 'Admin harus dapat menghapus dan memblokir gateway.');
 assert.match(app, /function renderWorkspaceMenu\(\)/, 'UI harus merender pilihan project dan gateway di sidebar.');
 assert.match(app, /async function applyAdminScope\(projectId='',gatewayId=''\)/, 'Dropdown sidebar dan filter utama harus memakai scope dashboard yang sama.');
 assert.match(app, /workspace-option/, 'UI harus menangani pilihan workspace dari menu sidebar.');
@@ -91,6 +97,8 @@ assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif k
 assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
 assert.match(css, /\.portal-network-grid/, 'Routing jaringan harus memiliki layout responsif.');
 assert.match(css, /\.portal-route-form/, 'Kartu routing harus menyediakan form yang rapi.');
+assert.match(css, /\.gateway-card\.pending/, 'Gateway pending harus memiliki status visual yang jelas.');
+assert.match(css, /\.blocked-gateway-item/, 'Daftar blokir gateway harus responsif dan terstruktur.');
 assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');
 const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1880px}');
 const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:block;width:100%;min-width:0;max-width:100%');

@@ -46,6 +46,7 @@ try {
   const networkResponse=await fetch(`${baseUrl}/api/admin/network`,{headers:{cookie}});
   const network=await networkResponse.json();
   assert(network.gateways.some(gateway=>gateway.id==='legacy-gateway'),'Gateway dari data lama harus dibuat otomatis.');
+  assert(network.gateways.some(gateway=>gateway.id==='legacy-gateway' && gateway.approval_status==='pending'),'Gateway legacy tanpa nama administrator harus masuk karantina setelah upgrade.');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolve=>child.once('exit',resolve));
@@ -58,6 +59,9 @@ assert(primaryKey.length===2 && primaryKey.some(column=>column.name==='gateway_i
 assert(['session_started_at','last_counter_at','incoming_bytes','outgoing_bytes','incoming_bps','outgoing_bps'].every(name=>clientColumns.some(column=>column.name===name)),'Migrasi harus menambahkan kolom telemetry WiFiDog tanpa menghilangkan client lama.');
 const telemetryColumns = migrated.prepare('PRAGMA table_info(telemetry_samples)').all();
 assert(['gateway_id','mac_address','user_id','ssid','sampled_at','incoming_delta','outgoing_delta','incoming_bps','outgoing_bps'].every(name=>telemetryColumns.some(column=>column.name===name)),'Migrasi harus menambahkan histori telemetry untuk grafik tanpa mengubah data client lama.');
+const gatewayColumns = migrated.prepare('PRAGMA table_info(gateways)').all();
+assert(['approval_status','approved_at'].every(name=>gatewayColumns.some(column=>column.name===name)),'Migrasi harus menambahkan status verifikasi gateway.');
+assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='gateway_blocks'").get(),'Migrasi harus menyediakan daftar blokir gateway.');
 migrated.close();
 await rm(dataDir,{recursive:true,force:true});
 console.log('Legacy multi-gateway migration: PASS');

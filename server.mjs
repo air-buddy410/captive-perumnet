@@ -32,7 +32,16 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS gateways (
     id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL,
     location TEXT, model TEXT, created_at TEXT NOT NULL, last_seen_at TEXT,
+    approval_status TEXT NOT NULL DEFAULT 'pending'
+      CHECK(approval_status IN ('pending','approved')),
+    approved_at TEXT,
     FOREIGN KEY(project_id) REFERENCES projects(id)
+  );
+  CREATE TABLE IF NOT EXISTS gateway_blocks (
+    gateway_id TEXT PRIMARY KEY, blocked_at TEXT NOT NULL, reason TEXT
+  );
+  CREATE TABLE IF NOT EXISTS schema_migrations (
+    name TEXT PRIMARY KEY, applied_at TEXT NOT NULL
   );
   CREATE TABLE IF NOT EXISTS portal_network_routes (
     gateway_id TEXT NOT NULL, network_alias TEXT NOT NULL,
@@ -123,6 +132,8 @@ try { db.exec('ALTER TABLE captive_sessions ADD COLUMN incoming_bytes INTEGER NO
 try { db.exec('ALTER TABLE captive_sessions ADD COLUMN outgoing_bytes INTEGER NOT NULL DEFAULT 0'); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE access_logs ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE notifications ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec("ALTER TABLE gateways ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved'))"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE gateways ADD COLUMN approved_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
 
 // Versions before multi-gateway support used MAC as the only primary key.
 // Rebuild the table once so the same device can be tracked independently on
@@ -186,6 +197,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_notifications_gateway ON notifications(gateway_id,created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_gateways_project ON gateways(project_id,last_seen_at DESC);
 `);
+if (!db.prepare("SELECT name FROM schema_migrations WHERE name='gateway-approval-v1'").get()) {
+  db.exec(`
+    UPDATE gateways SET
+      approval_status=CASE
+        WHEN id='unassigned' THEN 'pending'
+        WHEN name='Gateway ' || id THEN 'pending'
+        ELSE 'approved'
+      END,
+      approved_at=CASE
+        WHEN id<>'unassigned' AND name<>'Gateway ' || id THEN COALESCE(approved_at,created_at)
+        ELSE NULL
+      END;
+  `);
+  db.prepare('INSERT INTO schema_migrations (name,applied_at) VALUES (?,?)').run('gateway-approval-v1', migratedAt);
+}
 db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,updated_at) VALUES (1,?,?,?,?,?)`)
   .run('Masuk ke internet cepat.', 'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
 db.prepare(`UPDATE portal_settings SET welcome_title=?,welcome_text=?,updated_at=?
@@ -279,8 +305,13 @@ function gatewayKey(value) {
   const candidate = typeof value === 'object' && value ? value.gw_id : value;
   return String(candidate || '').trim().slice(0, 191) || 'unassigned';
 }
+function blockedGateway(gatewayId) {
+  const id = gatewayKey(gatewayId);
+  return id !== 'unassigned' && !!db.prepare('SELECT gateway_id FROM gateway_blocks WHERE gateway_id=?').get(id);
+}
 function ensureGateway(context = {}) {
   const gatewayId = gatewayKey(context);
+  if (blockedGateway(gatewayId)) return gatewayId;
   const now = new Date().toISOString();
   const suppliedName = String(context.gateway_name || '').trim().slice(0, 120);
   const suppliedModel = String(context.gateway_model || '').trim().slice(0, 120) || null;
@@ -292,7 +323,24 @@ function ensureGateway(context = {}) {
       model=COALESCE(gateways.model,excluded.model)`).run(gatewayId, suppliedName || defaultName, null, suppliedModel, now, now);
   return gatewayId;
 }
+function gatewayApproval(context = {}, register = true) {
+  const gatewayId = gatewayKey(context);
+  if (gatewayId === 'unassigned') return { gatewayId, status:'unassigned' };
+  if (blockedGateway(gatewayId)) return { gatewayId, status:'blocked' };
+  if (register) ensureGateway(context);
+  const gateway = db.prepare('SELECT approval_status FROM gateways WHERE id=?').get(gatewayId);
+  return { gatewayId, status:gateway?.approval_status || 'pending' };
+}
+function gatewayAuthorizationError(context = {}) {
+  if (!context.gw_id) return null;
+  const approval = gatewayApproval(context, true);
+  if (approval.status === 'approved') return null;
+  return approval.status === 'blocked'
+    ? 'Gateway ini diblokir oleh administrator PerumNet.'
+    : 'Gateway belum diverifikasi administrator PerumNet. Hubungi administrator sebelum menggunakan portal.';
+}
 function observePortalNetwork(context = {}) {
+  if (blockedGateway(context)) return null;
   const gatewayId = ensureGateway(context);
   const alias = networkAliasFromGateway(context);
   const cidr = clientCidr(context.client_ip);
@@ -339,6 +387,7 @@ function trackClient(context) {
   const mac = String(context.client_mac || '').trim().toLowerCase();
   const gatewayId = ensureGateway(context);
   observePortalNetwork({ ...context, gw_id:gatewayId });
+  if (gatewayApproval({ gw_id:gatewayId }, false).status !== 'approved') return { gatewayId, mac:null, quarantined:true };
   if (!mac) return { gatewayId, mac:null };
   const now = new Date().toISOString();
   db.prepare(`INSERT INTO clients (mac_address,client_ip,ssid,gateway_id,first_seen_at,last_seen_at)
@@ -469,6 +518,7 @@ function isClientRevoked(gatewayId, macAddress, nowIso = new Date().toISOString(
 }
 function wifiDogAuthorization(context, profile, userId) {
   if (!context.gw_address || !context.gw_port) return null;
+  if (gatewayApproval(context, true).status !== 'approved') return null;
   const port = Number(context.gw_port);
   const gateway = String(context.gw_address).trim();
   if (!Number.isInteger(port) || port < 1 || port > 65535 || !/^[a-zA-Z0-9.:[\]-]+$/.test(gateway)) return null;
@@ -525,6 +575,7 @@ function confirmWifiDogSession(url) {
   const now = new Date();
   const nowIso = now.toISOString();
 
+  if (gatewayApproval({ ...context, gw_id:requestGatewayId }, true).status !== 'approved') return false;
   if (isClientRevoked(requestGatewayId, mac, nowIso)) return false;
   trackClient({ ...context, gw_id:requestGatewayId });
 
@@ -625,6 +676,36 @@ function deleteClientRecords(gatewayId, macAddress) {
     throw error;
   }
   return { ok:true, gatewayId:scopedGatewayId, macAddress:mac, deletedAccount:!!userId, deletedDevices:deviceCount, gatewayAuthorizationRevoked:true };
+}
+function deleteAndBlockGateway(gatewayId) {
+  const scopedGatewayId = gatewayKey(gatewayId);
+  if (scopedGatewayId === 'unassigned') return { error:'Gateway sistem tidak dapat dihapus.', status:400 };
+  const gateway = db.prepare('SELECT id,name FROM gateways WHERE id=?').get(scopedGatewayId);
+  if (!gateway) return { error:'Gateway tidak ditemukan.', status:404 };
+  const blockedAt = new Date().toISOString();
+  const counts = {
+    clients:db.prepare('SELECT COUNT(*) AS total FROM clients WHERE gateway_id=?').get(scopedGatewayId)?.total || 0,
+    networks:db.prepare('SELECT COUNT(*) AS total FROM portal_network_routes WHERE gateway_id=?').get(scopedGatewayId)?.total || 0
+  };
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('DELETE FROM telemetry_samples WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM notifications WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM captive_sessions WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM access_logs WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM revoked_gateway_clients WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM clients WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM portal_network_routes WHERE gateway_id=?').run(scopedGatewayId);
+    db.prepare('DELETE FROM gateways WHERE id=?').run(scopedGatewayId);
+    db.prepare(`INSERT INTO gateway_blocks (gateway_id,blocked_at,reason) VALUES (?,?,?)
+      ON CONFLICT(gateway_id) DO UPDATE SET blocked_at=excluded.blocked_at,reason=excluded.reason`)
+      .run(scopedGatewayId, blockedAt, `Dihapus oleh administrator: ${gateway.name}`);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+  return { ok:true, gatewayId:scopedGatewayId, blocked:true, deletedClients:counts.clients, deletedNetworks:counts.networks };
 }
 async function sendVerification(email, token) {
   const link = `${config.baseUrl}/?verify=${token}`;
@@ -795,6 +876,9 @@ async function api(req, res, url) {
   }
   if (route === '/api/auth/register' && req.method === 'POST') {
     const { fullName, email, phone, address, password, consent, context } = await body(req);
+    const captive = contextFrom(context);
+    const gatewayError = gatewayAuthorizationError(captive);
+    if (config.reyeeMode === 'redirect' && gatewayError) return json(res, 403, { error:gatewayError, gatewayStatus:gatewayApproval(captive, false).status });
     if (!fullName || !email || !phone || !address || !password || !consent) return json(res, 400, { error: 'Lengkapi data pendaftaran dan persetujuan.' });
     if (password.length < 8) return json(res, 400, { error: 'Kata sandi minimal 8 karakter.' });
     const normalized = String(email).toLowerCase().trim(); const exists = db.prepare('SELECT id FROM users WHERE email=?').get(normalized);
@@ -873,14 +957,20 @@ async function api(req, res, url) {
     return json(res, 200, { message:'Kata sandi berhasil diperbarui.' });
   }
   if (route === '/api/auth/login' && req.method === 'POST') {
-    const { email, password, context } = await body(req); const user = db.prepare('SELECT * FROM users WHERE email=?').get(String(email || '').toLowerCase().trim());
+    const { email, password, context } = await body(req);
+    const captive = contextFrom(context);
+    const gatewayError = gatewayAuthorizationError(captive);
+    if (config.reyeeMode === 'redirect' && gatewayError) return json(res, 403, { error:gatewayError, gatewayStatus:gatewayApproval(captive, false).status });
+    const user = db.prepare('SELECT * FROM users WHERE email=?').get(String(email || '').toLowerCase().trim());
     if (!user || !verifyPassword(password || '', user.password_hash)) return json(res, 401, { error: 'Email atau kata sandi tidak tepat.' });
     if (!user.is_verified) return json(res, 403, { error: 'Email belum terverifikasi. Periksa inbox Anda.' });
-    const captive = contextFrom(context); writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email, user.id), user: { name: user.full_name, email: user.email } });
+    writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email, user.id), user: { name: user.full_name, email: user.email } });
   }
   if (route === '/api/captive/limited' && req.method === 'POST') {
     const { context } = await body(req);
     const captive = contextFrom(context);
+    const gatewayError = gatewayAuthorizationError(captive);
+    if (config.reyeeMode === 'redirect' && gatewayError) return json(res, 403, { error:gatewayError, gatewayStatus:gatewayApproval(captive, false).status });
     const networkRoute = portalRouteForContext(captive, true);
     if (config.reyeeMode === 'redirect' && captive.client_mac && networkRoute?.portal_mode !== 'free') {
       return json(res, 403, { error:'One-click hanya tersedia pada jaringan FreeWiFi. Sambungkan perangkat ke SSID gratis lalu coba kembali.' });
@@ -900,21 +990,23 @@ async function api(req, res, url) {
       FROM projects p LEFT JOIN gateways g ON g.project_id=p.id
       LEFT JOIN clients c ON c.gateway_id=g.id
       GROUP BY p.id ORDER BY CASE WHEN p.id='default-project' THEN 0 ELSE 1 END,p.name`).all();
-    const gateways = db.prepare(`SELECT g.id,g.project_id,g.name,g.location,g.model,g.created_at,g.last_seen_at,
+    const gateways = db.prepare(`SELECT g.id,g.project_id,g.name,g.location,g.model,g.created_at,g.last_seen_at,g.approval_status,g.approved_at,
       p.name AS project_name,COUNT(c.mac_address) AS client_count,
       SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized_count
       FROM gateways g JOIN projects p ON p.id=g.project_id
       LEFT JOIN clients c ON c.gateway_id=g.id
-      GROUP BY g.id ORDER BY CASE WHEN g.id='unassigned' THEN 1 ELSE 0 END,p.name,g.name`).all();
+      GROUP BY g.id ORDER BY CASE WHEN g.approval_status='pending' AND g.id<>'unassigned' THEN 0 WHEN g.id='unassigned' THEN 2 ELSE 1 END,p.name,g.name`).all();
     const portalNetworks = db.prepare(`SELECT n.gateway_id,n.network_alias,n.client_cidr,n.portal_mode,
-      n.first_seen_at,n.last_seen_at,n.configured_at,g.name AS gateway_name,g.project_id,p.name AS project_name
+      n.first_seen_at,n.last_seen_at,n.configured_at,g.name AS gateway_name,g.project_id,g.approval_status,p.name AS project_name
       FROM portal_network_routes n JOIN gateways g ON g.id=n.gateway_id JOIN projects p ON p.id=g.project_id
       ORDER BY p.name,g.name,n.network_alias`).all();
+    const blockedGateways = db.prepare('SELECT gateway_id,blocked_at,reason FROM gateway_blocks ORDER BY blocked_at DESC').all();
     const offlineDeadline = new Date(Date.now() - (Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20) * 60 * 1000).toISOString();
     return json(res, 200, {
       projects,
       gateways:gateways.map(gateway => ({ ...gateway, status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline' })),
-      portalNetworks
+      portalNetworks,
+      blockedGateways
     });
   }
   if (route === '/api/admin/monitoring' && req.method === 'GET') {
@@ -949,6 +1041,33 @@ async function api(req, res, url) {
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id,name=excluded.name,location=excluded.location,model=excluded.model`)
       .run(gatewayId, projectId, name, location, model, createdAt, current?.last_seen_at || null);
     return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
+  }
+  if (route === '/api/admin/gateways/approval' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const gatewayId = gatewayKey(payload.gatewayId);
+    if (gatewayId === 'unassigned') return json(res, 400, { error:'Gateway sistem tidak dapat diverifikasi.' });
+    const gateway = db.prepare('SELECT id FROM gateways WHERE id=?').get(gatewayId);
+    if (!gateway) return json(res, 404, { error:'Gateway tidak ditemukan atau sedang diblokir.' });
+    const approvedAt = new Date().toISOString();
+    db.prepare("UPDATE gateways SET approval_status='approved',approved_at=? WHERE id=?").run(approvedAt, gatewayId);
+    return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
+  }
+  if (route === '/api/admin/gateways' && req.method === 'DELETE') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const result = deleteAndBlockGateway(payload.gatewayId);
+    if (result.error) return json(res, result.status, { error:result.error });
+    return json(res, 200, result);
+  }
+  if (route === '/api/admin/gateway-blocks' && req.method === 'DELETE') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const gatewayId = gatewayKey(payload.gatewayId);
+    if (gatewayId === 'unassigned') return json(res, 400, { error:'ID gateway tidak valid.' });
+    const result = db.prepare('DELETE FROM gateway_blocks WHERE gateway_id=?').run(gatewayId);
+    if (!result.changes) return json(res, 404, { error:'Gateway tidak ada dalam daftar blokir.' });
+    return json(res, 200, { ok:true, gatewayId, message:'Blokir dibuka. Request berikutnya akan masuk sebagai gateway pending.' });
   }
   if (route === '/api/admin/portal-networks' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
@@ -1138,6 +1257,13 @@ const server = createServer(async (req, res) => {
     const wifiDogPath = freeWifiDog ? normalizedPath.slice('/free'.length) : normalizedPath;
     if (wifiDogPath === '/auth/wifidogAuth/login/' || wifiDogPath === '/auth/wifidogAuth/login') {
       const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
+      const approval = gatewayApproval(context, true);
+      if (approval.status !== 'blocked') portalRouteForContext(context, true);
+      if (approval.status !== 'approved') {
+        const reviewUrl = new URL('/gateway-review', config.baseUrl);
+        reviewUrl.searchParams.set('status', approval.status);
+        res.writeHead(302, { location:reviewUrl.toString(), 'cache-control':'no-store' }); return res.end();
+      }
       const networkRoute = portalRouteForContext(context, true);
       trackClient(context);
       if (!freeWifiDog && networkRoute?.portal_mode === 'free') {
@@ -1157,11 +1283,15 @@ const server = createServer(async (req, res) => {
     }
     if (wifiDogPath === '/auth/wifidogAuth/portal/' || wifiDogPath === '/auth/wifidogAuth/portal') {
       const context = contextFrom(Object.fromEntries(url.searchParams.entries()));
+      const approval = gatewayApproval(context, true);
+      if (approval.status !== 'approved') {
+        res.writeHead(302, { location:`${config.baseUrl}/gateway-review?status=${approval.status}` }); return res.end();
+      }
       const freeSession = freeWifiDog || portalModeForCallback(context) === 'free';
       res.writeHead(302, { location: `${config.baseUrl}${freeSession ? '/free' : '/'}?connected=1` }); return res.end();
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
-    let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname === '/free' || url.pathname === '/free/') ? '/index.html' : url.pathname;
+    let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname === '/free' || url.pathname === '/free/' || url.pathname === '/gateway-review' || url.pathname === '/gateway-review/') ? '/index.html' : url.pathname;
     const target = normalize(join(root, pathname));
     if (!target.startsWith(root)) return json(res, 403, { error: 'Forbidden' });
     await stat(target); res.writeHead(200, { 'content-type': mime[extname(target)] || 'application/octet-stream' }); res.end(await readFile(target));
