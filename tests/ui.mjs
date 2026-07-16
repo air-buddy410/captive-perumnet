@@ -48,6 +48,7 @@ assert.match(html, /id="gateway-review-screen"/, 'Client gateway pending harus m
 assert.match(html, /id="network-pending-total"/, 'Dashboard harus menampilkan jumlah gateway pending.');
 assert.match(html, /id="portal-network-list"/, 'Dashboard harus menampilkan routing portal per jaringan gateway.');
 assert.match(html, /id="portal-routing-title">Routing Captive Portal/, 'Admin harus menjelaskan routing satu Auth Server URL.');
+assert.match(html, /Satu VLAN · Satu routing/, 'Admin harus menjelaskan bahwa interface IP dan VLAN tidak ditampilkan ganda.');
 assert.match(html, /id="forgot-password-screen" class="login-page portal-modal"/, 'Portal harus menyediakan pemulihan kata sandi melalui email.');
 assert.match(html, /id="reset-password-screen" class="login-page account-action-page"/, 'Tautan reset harus membuka halaman khusus di luar hotspot.');
 assert.match(html, /id="account-status-screen" class="success-page account-action-page"/, 'Verifikasi email harus membuka halaman status khusus.');
@@ -80,6 +81,8 @@ assert.match(app, /category:'all'.*totalPages:1/, 'UI harus menyimpan state pagi
 assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus client harus dibatasi pada gateway yang tepat.');
 assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
 assert.match(app, /function renderPortalNetworkRoutes\(\)/, 'UI harus merender mapping Portal Akun dan Portal Free per jaringan.');
+assert.match(app, /name="networkDescription"/, 'Setiap VLAN harus memiliki input deskripsi yang mudah dikenali admin.');
+assert.match(app, /networkDescription=data\.get\('networkDescription'\)/, 'Deskripsi VLAN harus ikut disimpan bersama routing.');
 assert.match(app, /\/api\/admin\/portal-networks/, 'Admin harus dapat menyimpan routing portal per gateway.');
 assert.match(app, /\/api\/admin\/gateways\/approval/, 'Admin harus dapat menyetujui gateway secara eksplisit.');
 assert.match(app, /\/api\/admin\/gateway-blocks/, 'Admin harus dapat membuka blokir gateway dengan aman.');
@@ -97,6 +100,7 @@ assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif k
 assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
 assert.match(css, /\.portal-network-grid/, 'Routing jaringan harus memiliki layout responsif.');
 assert.match(css, /\.portal-route-form/, 'Kartu routing harus menyediakan form yang rapi.');
+assert.match(css, /\.portal-network-description/, 'Deskripsi VLAN harus terlihat jelas pada kartu routing.');
 assert.match(css, /\.gateway-card\.pending/, 'Gateway pending harus memiliki status visual yang jelas.');
 assert.match(css, /\.blocked-gateway-item/, 'Daftar blokir gateway harus responsif dan terstruktur.');
 assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');

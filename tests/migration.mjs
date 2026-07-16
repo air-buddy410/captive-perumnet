@@ -16,6 +16,17 @@ legacy.exec(`
   );
   INSERT INTO clients (mac_address,client_ip,ssid,gateway_id,access_type,auth_status,first_seen_at,last_seen_at)
   VALUES ('02:00:00:00:99:01','10.99.0.10','Legacy WiFi','legacy-gateway','limited','pending','2026-01-01T00:00:00.000Z','2026-01-02T00:00:00.000Z');
+  CREATE TABLE portal_network_routes (
+    gateway_id TEXT NOT NULL, network_alias TEXT NOT NULL,
+    client_cidr TEXT, portal_mode TEXT NOT NULL DEFAULT 'account',
+    first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, configured_at TEXT,
+    PRIMARY KEY(gateway_id,network_alias)
+  );
+  INSERT INTO portal_network_routes
+    (gateway_id,network_alias,client_cidr,portal_mode,first_seen_at,last_seen_at,configured_at)
+  VALUES
+    ('legacy-gateway','10.99.0.0/24','10.99.0.0/24','free','2026-01-01T00:00:00.000Z','2026-01-03T00:00:00.000Z','2026-01-03T00:00:00.000Z'),
+    ('legacy-gateway','VLAN99','10.99.0.0/24','account','2026-01-02T00:00:00.000Z','2026-01-02T00:00:00.000Z',NULL);
 `);
 legacy.close();
 
@@ -62,6 +73,10 @@ assert(['gateway_id','mac_address','user_id','ssid','sampled_at','incoming_delta
 const gatewayColumns = migrated.prepare('PRAGMA table_info(gateways)').all();
 assert(['approval_status','approved_at'].every(name=>gatewayColumns.some(column=>column.name===name)),'Migrasi harus menambahkan status verifikasi gateway.');
 assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='gateway_blocks'").get(),'Migrasi harus menyediakan daftar blokir gateway.');
+const routeColumns = migrated.prepare('PRAGMA table_info(portal_network_routes)').all();
+assert(routeColumns.some(column=>column.name==='network_description'),'Migrasi harus menambahkan deskripsi VLAN tanpa merusak routing lama.');
+const migratedRoutes = migrated.prepare("SELECT network_alias,client_cidr,portal_mode FROM portal_network_routes WHERE gateway_id='legacy-gateway'").all();
+assert(migratedRoutes.length===1 && migratedRoutes[0].network_alias==='VLAN99' && migratedRoutes[0].portal_mode==='free','Migrasi harus menggabungkan interface IP ke VLAN dan mempertahankan routing yang sudah dikonfigurasi.');
 migrated.close();
 await rm(dataDir,{recursive:true,force:true});
 console.log('Legacy multi-gateway migration: PASS');
