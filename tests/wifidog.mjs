@@ -35,6 +35,10 @@ try {
 
   const mac = '02:00:00:00:10:01';
   const context = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac, ip:'10.1.10.10', ssid:'VLAN10' };
+  const freePageResponse = await fetch(`${baseUrl}/free?gw_id=test-gateway&mac=${encodeURIComponent(mac)}`);
+  assert(freePageResponse.status === 200 && (await freePageResponse.text()).includes('id="free-screen"'), 'Route /free harus menyajikan portal one-click.');
+  const freeLoginResponse = await fetch(`${baseUrl}/free/auth/wifidogAuth/login/?gw_id=test-gateway&mac=${encodeURIComponent(mac)}&ip=10.1.10.10`);
+  assert(freeLoginResponse.status === 200 && (await freeLoginResponse.text()).includes('id="free-connect"'), 'Login WiFiDog dengan prefix /free harus membuka portal one-click.');
   const limitedResponse = await fetch(`${baseUrl}/api/captive/limited`, {
     method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context })
   });
@@ -47,26 +51,28 @@ try {
   assert(gatewayUrl.hostname === '10.1.10.1' && gatewayUrl.port === '2060', 'Redirect harus menuju gateway lokal.');
   assert(token?.length === 64, 'Token WiFiDog harus acak dan tersedia.');
 
-  const queryBefore = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
+  const queryBefore = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryBefore.body === 'Auth: 0\n', 'Client belum boleh aktif sebelum token dikonfirmasi gateway.');
-  const wrongMac = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.11&mac=02:00:00:00:10:02&token=${token}`);
+  const wrongMac = await request(`/free/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.11&mac=02:00:00:00:10:02&token=${token}`);
   assert(wrongMac.body === 'Auth: 0\n', 'Token harus ditolak untuk MAC berbeda.');
-  const login = await request(`/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
+  const login = await request(`/free/auth/wifidogAuth/auth/?stage=login&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
   assert(login.body === 'Auth: 1\n', 'Token valid harus mengaktifkan internet.');
-  const queryAfter = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
+  const freePortalCallback = await fetch(`${baseUrl}/free/auth/wifidogAuth/portal/?gw_id=test-gateway&mac=${encodeURIComponent(mac)}&token=${token}`, { redirect:'manual' });
+  assert(freePortalCallback.status === 302 && new URL(freePortalCallback.headers.get('location')).pathname === '/free', 'Callback portal limited harus kembali ke /free.');
+  const queryAfter = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryAfter.body === 'Auth: 1\n', 'Query session aktif harus diizinkan.');
-  const counters = await request(`/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
+  const counters = await request(`/free/auth/wifidogAuth/auth/?stage=counters&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
   assert(counters.body === 'Auth: 1\n', 'Counters dengan token aktif harus diizinkan.');
   await new Promise(resolve => setTimeout(resolve, 1900));
-  const queryExpired = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
+  const queryExpired = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryExpired.body === 'Auth: 0\n', 'Session limited harus ditutup setelah durasinya habis.');
-  const logout = await request(`/auth/wifidogAuth/auth/?stage=logout&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
+  const logout = await request(`/free/auth/wifidogAuth/auth/?stage=logout&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}&token=${token}`);
   assert(logout.body === 'Auth: 0\n', 'Logout harus mencabut session.');
-  const queryLoggedOut = await request(`/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
+  const queryLoggedOut = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryLoggedOut.body === 'Auth: 0\n', 'Client logout tidak boleh tetap aktif.');
 
   const accountMac = '02:00:00:00:20:01';
-  const accountContext = { ...context, mac:accountMac, ip:'10.1.10.20', wlan_name:'@PERUMNET_FreeWiFi' };
+  const accountContext = { ...context, mac:accountMac, ip:'10.1.10.20', wlan_name:'@PERUMNET_WiFi' };
   const registerResponse = await fetch(`${baseUrl}/api/auth/register`, {
     method:'POST', headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ fullName:'WiFiDog Test', email:'wifidog-test@example.com', phone:'081234567890', address:'Test', password:'test-password-123', consent:true })
@@ -121,6 +127,13 @@ try {
   });
   const adminCookie = adminLogin.headers.get('set-cookie');
   assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  const portalSettingsUpdate = await fetch(`${baseUrl}/api/admin/settings`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ accountSsid:'@PERUMNET_WiFi',freeSsid:'@PERUMNET_FreeWiFi',welcomeTitle:'Masuk ke internet cepat.',welcomeText:'Gunakan akun terverifikasi.',termsText:'Ketentuan jaringan.',limitedBandwidthKbps:512 })
+  });
+  assert(portalSettingsUpdate.status === 200, 'Admin harus dapat menyimpan SSID portal akun dan portal free.');
+  const updatedPortalSettings = await (await fetch(`${baseUrl}/api/settings`)).json();
+  assert(updatedPortalSettings.account_ssid === '@PERUMNET_WiFi' && updatedPortalSettings.free_ssid === '@PERUMNET_FreeWiFi', 'API settings harus mengembalikan dua SSID portal yang tepat.');
   const secondGatewayContext = { ...context, gw_id:'branch-gateway', ip:'10.2.10.10' };
   const secondGatewayResponse = await fetch(`${baseUrl}/api/captive/limited`, {
     method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:secondGatewayContext })
@@ -160,8 +173,8 @@ try {
   const clientsBeforeDelete = await fetch(`${baseUrl}/api/admin/clients`, { headers:{ cookie:adminCookie } });
   const clientList = await clientsBeforeDelete.json();
   assert(clientList.clients.filter(client=>client.mac_address===mac).length === 2, 'Satu MAC pada dua gateway tidak boleh saling menimpa.');
-  assert(clientList.clients.some(client=>client.gateway_id==='test-gateway' && client.mac_address===mac && client.ssid==='PerumNet Guest'), 'Alias VLAN dari gateway harus diganti SSID fallback.');
-  assert(clientList.clients.some(client=>client.mac_address===accountMac && client.ssid==='@PERUMNET_FreeWiFi'), 'Parameter WLAN asli Ruijie harus diprioritaskan sebagai SSID.');
+  assert(clientList.clients.some(client=>client.gateway_id==='test-gateway' && client.mac_address===mac && client.ssid==='@PERUMNET_FreeWiFi'), 'Alias VLAN client limited harus diganti SSID fallback portal free.');
+  assert(clientList.clients.some(client=>client.mac_address===accountMac && client.ssid==='@PERUMNET_WiFi'), 'Parameter WLAN asli Ruijie harus diprioritaskan sebagai SSID portal akun.');
   const deleteResponse = await fetch(`${baseUrl}/api/admin/clients`, {
     method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ gatewayId:'test-gateway',macAddress:accountMac })
   });

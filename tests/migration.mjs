@@ -31,11 +31,13 @@ child.stderr.on('data',chunk=>{ serverError+=chunk; });
 const assert=(condition,message)=>{ if(!condition) throw new Error(message); };
 
 try {
+  let settings;
   for(let attempt=0;attempt<50;attempt+=1){
-    try { if((await fetch(`${baseUrl}/api/settings`)).ok) break; } catch { /* Starting. */ }
+    try { const response=await fetch(`${baseUrl}/api/settings`); if(response.ok){ settings=await response.json(); break; } } catch { /* Starting. */ }
     await new Promise(resolve=>setTimeout(resolve,100));
     if(attempt===49) throw new Error(`Server migrasi tidak aktif. ${serverError}`);
   }
+  assert(settings.account_ssid==='@PERUMNET_WiFi' && settings.free_ssid==='@PERUMNET_FreeWiFi','Migrasi harus menambahkan fallback SSID untuk kedua profil portal.');
   const login=await fetch(`${baseUrl}/api/admin/login`,{ method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:'migration@example.com',password:'migration-password'}) });
   const cookie=login.headers.get('set-cookie');
   const clientsResponse=await fetch(`${baseUrl}/api/admin/clients`,{headers:{cookie}});

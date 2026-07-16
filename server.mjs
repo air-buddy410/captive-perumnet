@@ -83,6 +83,8 @@ db.exec(`
   );
 `);
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN default_ssid TEXT NOT NULL DEFAULT 'PerumNet Guest'"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec("ALTER TABLE portal_settings ADD COLUMN account_ssid TEXT NOT NULL DEFAULT '@PERUMNET_WiFi'"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec("ALTER TABLE portal_settings ADD COLUMN free_ssid TEXT NOT NULL DEFAULT '@PERUMNET_FreeWiFi'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec('ALTER TABLE clients ADD COLUMN authorized_until TEXT'); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE access_logs ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE notifications ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
@@ -147,7 +149,10 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_gateways_project ON gateways(project_id,last_seen_at DESC);
 `);
 db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,updated_at) VALUES (1,?,?,?,?,?)`)
-  .run('Internet sesuai kebutuhan Anda.', 'Pilih akses cepat atau langsung terhubung dengan kecepatan terbatas.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
+  .run('Masuk ke internet cepat.', 'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
+db.prepare(`UPDATE portal_settings SET welcome_title=?,welcome_text=?,updated_at=?
+  WHERE id=1 AND welcome_title='Internet sesuai kebutuhan Anda.' AND welcome_text='Pilih akses cepat atau langsung terhubung dengan kecepatan terbatas.'`)
+  .run('Masuk ke internet cepat.', 'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.', new Date().toISOString());
 
 const config = {
   port: Number(process.env.PORT || 3000),
@@ -490,7 +495,7 @@ async function sendPasswordReset(email, token) {
 async function api(req, res, url) {
   const route = url.pathname;
   if (route === '/api/settings' && req.method === 'GET') {
-    const settings = db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid FROM portal_settings WHERE id=1').get();
+    const settings = db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid,account_ssid,free_ssid FROM portal_settings WHERE id=1').get();
     return json(res, 200, { ...settings, limited_session_hours:sessionHoursFor('limited') });
   }
   if (route === '/api/auth/register' && req.method === 'POST') {
@@ -643,8 +648,11 @@ async function api(req, res, url) {
       FROM clients c LEFT JOIN users u ON u.id=c.user_id
       JOIN gateways g ON g.id=c.gateway_id JOIN projects p ON p.id=g.project_id
       ${scopeSql} ORDER BY c.last_seen_at DESC LIMIT 500`).all(...scopeParams);
-    const fallbackSsid = db.prepare('SELECT default_ssid FROM portal_settings WHERE id=1').get()?.default_ssid || null;
-    const clients = rows.map(row => ({ ...row, ssid:ssidFromGateway({ ssid:row.ssid }) || fallbackSsid }));
+    const ssidSettings = db.prepare('SELECT default_ssid,account_ssid,free_ssid FROM portal_settings WHERE id=1').get() || {};
+    const clients = rows.map(row => ({
+      ...row,
+      ssid:ssidFromGateway({ ssid:row.ssid }) || (row.access_type === 'limited' ? ssidSettings.free_ssid : ssidSettings.account_ssid || ssidSettings.default_ssid) || null
+    }));
     const today = new Date().toISOString().slice(0,10);
     const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(c.last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
       SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized
@@ -685,7 +693,16 @@ async function api(req, res, url) {
     if (result.error) return json(res, result.status, { error:result.error });
     return json(res, 200, result);
   }
-  if (route === '/api/admin/settings' && req.method === 'POST') { if (!requireAdmin(req,res)) return; const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId,defaultSsid } = await body(req); db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,default_ssid=?,updated_at=? WHERE id=1').run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, String(defaultSsid || 'PerumNet Guest').trim(), new Date().toISOString()); return json(res, 200, { ok: true }); }
+  if (route === '/api/admin/settings' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId,accountSsid,freeSsid } = await body(req);
+    const normalizedAccountSsid = String(accountSsid || '@PERUMNET_WiFi').trim().slice(0,128);
+    const normalizedFreeSsid = String(freeSsid || '@PERUMNET_FreeWiFi').trim().slice(0,128);
+    if (!normalizedAccountSsid || !normalizedFreeSsid) return json(res, 400, { error:'Kedua SSID portal wajib diisi.' });
+    db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,default_ssid=?,account_ssid=?,free_ssid=?,updated_at=? WHERE id=1')
+      .run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, normalizedAccountSsid, normalizedAccountSsid, normalizedFreeSsid, new Date().toISOString());
+    return json(res, 200, { ok:true, accountSsid:normalizedAccountSsid, freeSsid:normalizedFreeSsid });
+  }
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
 }
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.svg':'image/svg+xml' };
@@ -697,7 +714,9 @@ const server = createServer(async (req, res) => {
   try {
     // Reyee WiFiDog appends these paths to the Auth Server URL. A leading double
     // slash is normal in ReyeeOS redirects, so normalize it before matching.
-    const wifiDogPath = url.pathname.replace(/^\/+/,'/');
+    const normalizedPath = url.pathname.replace(/^\/+/,'/');
+    const freeWifiDog = normalizedPath === '/free/auth/wifidogAuth' || normalizedPath.startsWith('/free/auth/wifidogAuth/');
+    const wifiDogPath = freeWifiDog ? normalizedPath.slice('/free'.length) : normalizedPath;
     if (wifiDogPath === '/auth/wifidogAuth/login/' || wifiDogPath === '/auth/wifidogAuth/login') {
       trackClient(contextFrom(Object.fromEntries(url.searchParams.entries())));
       res.writeHead(200, { 'content-type': mime['.html'] }); return res.end(await readFile(join(root, 'index.html')));
@@ -711,10 +730,10 @@ const server = createServer(async (req, res) => {
       return text(res, 200, confirmWifiDogSession(url) ? 'Auth: 1\n' : 'Auth: 0\n');
     }
     if (wifiDogPath === '/auth/wifidogAuth/portal/' || wifiDogPath === '/auth/wifidogAuth/portal') {
-      res.writeHead(302, { location: `${config.baseUrl}/?connected=1` }); return res.end();
+      res.writeHead(302, { location: `${config.baseUrl}${freeWifiDog ? '/free' : '/'}?connected=1` }); return res.end();
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
-    let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/') ? '/index.html' : url.pathname;
+    let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname === '/free' || url.pathname === '/free/') ? '/index.html' : url.pathname;
     const target = normalize(join(root, pathname));
     if (!target.startsWith(root)) return json(res, 403, { error: 'Forbidden' });
     await stat(target); res.writeHead(200, { 'content-type': mime[extname(target)] || 'application/octet-stream' }); res.end(await readFile(target));

@@ -1,10 +1,12 @@
 const $ = (selector) => document.querySelector(selector);
-const screens = { portal: $('#portal-screen'), success: $('#success-screen'), limited: $('#limited-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
+const screens = { portal: $('#portal-screen'), free:$('#free-screen'), success: $('#success-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
 // Preserve every query parameter forwarded by the gateway. WiFiDog uses
 // gw_address, gw_port, gw_id, mac, url, and token.
 const captiveContext = Object.fromEntries(new URLSearchParams(location.search).entries());
 const isAdminView = location.pathname === '/admin' || location.pathname === '/admin/';
+const isFreeView = location.pathname === '/free' || location.pathname === '/free/' || location.pathname.startsWith('/free/auth/wifidogAuth/login');
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
+if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title='PerumNet — Internet Gratis'; }
 const pageParams = new URLSearchParams(location.search);
 let verificationToken = pageParams.get('verify');
 let passwordResetToken = pageParams.get('reset');
@@ -24,9 +26,16 @@ function setWifiName(name) { document.querySelectorAll('[data-wifi-name]').forEa
 async function loadPortalSettings() {
   try {
     portalSettings = await api('/api/settings');
-    const wifiName = gatewaySsid || portalSettings.default_ssid || 'PerumNet Guest';
+    const accountSsid = portalSettings.account_ssid || '@PERUMNET_WiFi';
+    const freeSsid = portalSettings.free_ssid || '@PERUMNET_FreeWiFi';
+    const wifiName = gatewaySsid || (isFreeView ? freeSsid : accountSsid);
     setWifiName(wifiName);
-    if ($('#setting-wifi')) $('#setting-wifi').value = portalSettings.default_ssid || 'PerumNet Guest';
+    if ($('#setting-account-ssid')) $('#setting-account-ssid').value = accountSsid;
+    if ($('#setting-free-ssid')) $('#setting-free-ssid').value = freeSsid;
+    if ($('#account-profile-ssid')) $('#account-profile-ssid').textContent = accountSsid;
+    if ($('#free-profile-ssid')) $('#free-profile-ssid').textContent = freeSsid;
+    if ($('#preview-account-ssid')) $('#preview-account-ssid').textContent = accountSsid;
+    if ($('#preview-free-ssid')) $('#preview-free-ssid').textContent = freeSsid;
     if ($('#setting-title')) $('#setting-title').value = portalSettings.welcome_title || $('#setting-title').value;
     if ($('#setting-copy')) $('#setting-copy').value = portalSettings.welcome_text || $('#setting-copy').value;
     if ($('#setting-bandwidth')) $('#setting-bandwidth').value = portalSettings.limited_bandwidth_kbps || 512;
@@ -35,7 +44,8 @@ async function loadPortalSettings() {
     if ($('#portal-copy')) $('#portal-copy').textContent = portalSettings.welcome_text || $('#portal-copy').textContent;
     if ($('#choice-bandwidth')) $('#choice-bandwidth').textContent = `${portalSettings.limited_bandwidth_kbps || 512} Kbps`;
     if ($('#choice-duration')) $('#choice-duration').textContent = `${portalSettings.limited_session_hours || 2} jam`;
-  } catch { setWifiName(gatewaySsid || 'PerumNet Guest'); }
+    if ($('#free-duration')) $('#free-duration').textContent = `${portalSettings.limited_session_hours || 2} jam`;
+  } catch { setWifiName(gatewaySsid || (isFreeView ? '@PERUMNET_FreeWiFi' : '@PERUMNET_WiFi')); }
 }
 const leads = [];
 let networkCatalog = { projects:[], gateways:[] };
@@ -65,8 +75,9 @@ function showAccountStatus(title, message, success=true) { $('#account-status-ti
 function clearAccountActionUrl() { history.replaceState({},'',location.pathname); }
 function startDestinationRedirect() { clearInterval(redirectTimer); let seconds=3; $('#redirect-countdown').textContent=seconds; redirectTimer=setInterval(()=>{ seconds-=1; $('#redirect-countdown').textContent=Math.max(seconds,0); if (seconds <= 0) { clearInterval(redirectTimer); location.assign(destinationUrl); } },1000); }
 function connectToWifi(withLead) { $('#success-message').textContent = withLead ? 'Akun Anda sudah aktif dan akses internet berhasil tersambung.' : 'Akses internet Anda sudah aktif. Selamat menggunakan WiFi gratis PerumNet.'; show('success'); startDestinationRedirect(); }
-function connectLimited() { show('limited'); }
-if (new URLSearchParams(location.search).get('connected') === '1') connectToWifi(false);
+const isConnectedCallback = new URLSearchParams(location.search).get('connected') === '1';
+if (isConnectedCallback) connectToWifi(!isFreeView);
+else if (isFreeView) show('free');
 const escapeHtml = value => String(value ?? '—').replace(/[&<>'"]/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
 const formatTime = value => value ? new Date(value).toLocaleString('id-ID', { dateStyle:'medium', timeStyle:'short' }) : '—';
 function relativeTime(value) {
@@ -156,7 +167,8 @@ restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
 $('#lead-form').addEventListener('submit', async e => { e.preventDefault(); const data = new FormData(e.currentTarget); if (![...data.values()].every(Boolean)) { $('#form-error').textContent = 'Lengkapi semua data, kata sandi, dan setujui syarat terlebih dahulu.'; return; } const button=e.currentTarget.querySelector('button'); button.disabled=true; try { const result = await api('/api/auth/register', { fullName:data.get('name'), email:data.get('email'), phone:data.get('phone'), address:data.get('address'), password:data.get('password'), consent:data.get('consent'), context:captiveContext }); $('#form-error').textContent=''; pendingVerificationEmail=result.email; $('#verification-email').textContent = result.email; show('verify'); } catch (error) { $('#form-error').textContent = error.message; } finally { button.disabled=false; } });
-$('#choose-high-speed').onclick = showLeadForm; $('#back-to-access-choice').onclick = showAccessChoice; $('#choose-limited').onclick = async e => { e.currentTarget.disabled=true; try { const result = await api('/api/captive/limited', { context:captiveContext }); $('#limited-bandwidth').textContent = `${result.bandwidthKbps} Kbps`; $('#limited-duration').textContent = `${result.sessionHours || 2} jam`; handleAuthorization(result, connectLimited); } catch (error) { alert(error.message); e.currentTarget.disabled=false; } };
+$('#choose-high-speed').onclick = showLeadForm; $('#back-to-access-choice').onclick = showAccessChoice;
+$('#free-connect').onclick = async event => { const button=event.currentTarget,feedback=$('#free-feedback'),label=button.querySelector('.button-label'); button.disabled=true; feedback.textContent=''; label.textContent='Menghubungkan…'; try { const result=await api('/api/captive/limited',{ context:captiveContext }); handleAuthorization(result,()=>connectToWifi(false)); } catch(error) { feedback.textContent=error.message; button.disabled=false; label.textContent='Sambungkan Internet Gratis'; } };
 $('#quick-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('button'), feedback=$('#quick-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
 $('#open-user-login').onclick = () => showUserLogin(); $('#back-from-user-login').onclick = showAccessChoice; $('#close-user-login').onclick = showAccessChoice;
 $('#user-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('.primary-button'), feedback=$('#user-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
@@ -167,7 +179,6 @@ $('#reset-password-form').addEventListener('submit', async event => { event.prev
 $('#account-status-action').onclick = () => location.assign(destinationUrl);
 $('#resend-verification').onclick = async e => { const feedback=$('#verification-status'); if (!pendingVerificationEmail) { feedback.textContent='Kembali ke formulir lalu masukkan ulang data pendaftaran.'; return; } e.currentTarget.disabled=true; feedback.textContent='Mengirim ulang email…'; try { const result=await api('/api/auth/resend',{ email:pendingVerificationEmail }); feedback.textContent=result.message; } catch(error) { feedback.textContent=error.message; } finally { e.currentTarget.disabled=false; } }; $('#back-from-verify').onclick = showAccessChoice;
 $('#browse-button').onclick = () => { clearInterval(redirectTimer); location.assign(destinationUrl); };
-$('#upgrade-access').onclick = showLeadForm; $('#continue-limited').onclick = () => location.assign(destinationUrl);
 $('#admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#access-admin-trigger').onclick = e => { e.preventDefault(); location.assign('/admin'); }; $('#back-portal').onclick = () => location.assign('/');
 $('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
 function setSidebar(open) { document.body.classList.toggle('sidebar-open',open); $('#sidebar-toggle').setAttribute('aria-expanded',String(open)); }
@@ -185,4 +196,4 @@ $('#gateway-list').addEventListener('submit',async event=>{ const form=event.tar
 $('#search-input').addEventListener('input', e => { const q=e.target.value.toLowerCase(); renderLeads(leads.filter(l => `${l.name} ${l.email} ${l.phone} ${l.address} ${l.mac} ${l.ip} ${l.ssid} ${l.project} ${l.gateway} ${l.gatewayId}`.toLowerCase().includes(q))); });
 $('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, dan riwayat akses akan dihapus.' : `Perangkat dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
 $('#export-csv').onclick = () => { const csvCell = value => `"${String(value ?? '').replaceAll('"','""')}"`; const csv=['Nama,Email / Identitas,Project,Gateway,Gateway ID,Nomor HP,Alamat,MAC,IP Klien,SSID,Tipe Akses,Status,Waktu Terakhir',...leads.map(l=>[l.name,l.email,l.project,l.gateway,l.gatewayId,l.phone,l.address,l.mac,l.ip,l.ssid,l.type === 'high' ? 'High Speed' : l.type === 'limited' ? 'Limited' : l.type === 'offline' ? 'Offline' : 'Menunggu login',l.status,l.time].map(csvCell).join(','))].join('\n'); const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'})); a.download=`data-perangkat-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); URL.revokeObjectURL(a.href); };
-$('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const wifi=$('#setting-wifi').value.trim() || 'PerumNet Guest', title=$('#setting-title').value || 'Terhubung dalam hitungan detik.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { defaultSsid:wifi, welcomeTitle:title, welcomeText:copy, termsText:terms, limitedBandwidthKbps:bandwidth }); portalSettings = { ...portalSettings, default_ssid:wifi, welcome_title:title, welcome_text:copy, terms_text:terms, limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || wifi); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#choice-bandwidth').textContent=`${bandwidth} Kbps`; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });
+$('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const accountSsid=$('#setting-account-ssid').value.trim() || '@PERUMNET_WiFi', freeSsid=$('#setting-free-ssid').value.trim() || '@PERUMNET_FreeWiFi', title=$('#setting-title').value || 'Masuk ke internet cepat.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { accountSsid,freeSsid,welcomeTitle:title,welcomeText:copy,termsText:terms,limitedBandwidthKbps:bandwidth }); portalSettings={ ...portalSettings,account_ssid:accountSsid,free_ssid:freeSsid,default_ssid:accountSsid,welcome_title:title,welcome_text:copy,terms_text:terms,limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || accountSsid); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#account-profile-ssid').textContent=accountSsid; $('#free-profile-ssid').textContent=freeSsid; $('#preview-account-ssid').textContent=accountSsid; $('#preview-free-ssid').textContent=freeSsid; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });

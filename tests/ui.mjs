@@ -9,6 +9,13 @@ const [html, css, app, favicon] = await Promise.all([
 ]);
 
 assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Status koneksi harus memakai modal.');
+assert.match(html, /id="free-screen" class="free-page"/, 'Portal harus menyediakan halaman khusus one-click di /free.');
+assert.match(html, /id="free-connect"[^>]*type="button"/, 'Halaman free harus menyediakan satu tombol koneksi tanpa formulir.');
+assert.doesNotMatch(html, /id="choose-limited"/, 'Portal akun utama tidak boleh lagi menampilkan pilihan one-click.');
+assert.match(html, /id="setting-account-ssid" value="@PERUMNET_WiFi"/, 'Admin harus menyediakan SSID khusus portal akun.');
+assert.match(html, /id="setting-free-ssid" value="@PERUMNET_FreeWiFi"/, 'Admin harus menyediakan SSID khusus portal gratis.');
+assert.match(html, /class="portal-profile-card account"/, 'Admin harus menjelaskan profil portal akun.');
+assert.match(html, /class="portal-profile-card free"/, 'Admin harus menjelaskan profil portal free.');
 assert.match(html, /id="user-login-screen" class="login-page portal-modal"/, 'Login pelanggan harus memakai modal.');
 assert.match(html, /id="sidebar-toggle"/, 'Dashboard harus menyediakan tombol navigasi mobile.');
 assert.match(html, /rel="icon"[^>]*perumnet-favicon\.png/, 'Portal harus menggunakan favicon PerumNet.');
@@ -34,6 +41,9 @@ assert.match(html, /<form id="login-form"><label>Email<input type="email" placeh
 assert.match(html, /placeholder="Masukkan kata sandi"/, 'Login admin harus menyediakan placeholder kata sandi.');
 assert.doesNotMatch(html, /value="it@perumnet\.id"/, 'Login admin tidak boleh mengisi email secara statis.');
 assert.match(app, /const destinationUrl = 'https:\/\/perumnet\.id'/, 'Tujuan redirect PerumNet harus tetap eksplisit.');
+assert.match(app, /const isFreeView = location\.pathname === '\/free'/, 'UI harus mengenali halaman khusus /free.');
+assert.match(app, /api\('\/api\/captive\/limited',\{ context:captiveContext \}\)/, 'Tombol halaman free harus memakai otorisasi limited.');
+assert.match(app, /accountSsid,freeSsid,welcomeTitle:title/, 'Admin harus menyimpan dua identitas SSID secara bersamaan.');
 assert.match(app, /startDestinationRedirect\(\)/, 'Status koneksi harus memulai redirect otomatis.');
 assert.match(app, /data-label="Nomor HP"/, 'Tabel mobile harus memiliki label kartu data.');
 assert.match(app, /networkAliasPattern/, 'UI harus menolak network alias sebagai SSID.');
@@ -50,6 +60,7 @@ assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpo
 assert.match(css, /\.notification-panel\.open/, 'Panel notifikasi harus memiliki state terbuka yang jelas.');
 assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif khusus.');
 assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
+assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');
 const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1580px}');
 const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:block;width:100%;min-width:0;max-width:100%');
 assert.ok(mobileGatewayTableReset > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel multi-gateway.');
