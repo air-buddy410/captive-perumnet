@@ -35,7 +35,7 @@ try {
 
   const mac = '02:00:00:00:10:01';
   const context = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac, ip:'10.1.10.10', ssid:'VLAN10' };
-  const defaultLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10`, { redirect:'manual' });
+  const defaultLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10&vlan_description=Guest%20Free`, { redirect:'manual' });
   assert(defaultLogin.status === 302 && new URL(defaultLogin.headers.get('location')).pathname === '/gateway-review', 'Gateway baru harus dikarantina sampai diverifikasi admin.');
   const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
@@ -46,6 +46,7 @@ try {
   const discoveredNetworkResponse = await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } });
   const discoveredNetwork = await discoveredNetworkResponse.json();
   assert(discoveredNetwork.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_alias==='VLAN10' && route.portal_mode==='account'), 'Redirect WiFiDog harus menemukan alias VLAN dengan fallback Portal Akun.');
+  assert(discoveredNetwork.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_description==='Guest Free'), 'Deskripsi VLAN harus dibaca jika firmware mengirim parameternya.');
   assert(discoveredNetwork.gateways.some(gateway=>gateway.id==='test-gateway' && gateway.approval_status==='pending'), 'Gateway baru harus tampil sebagai menunggu verifikasi.');
   const quarantinedLimited = await fetch(`${baseUrl}/api/captive/limited`, {
     method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context })
@@ -60,7 +61,7 @@ try {
   assert(approvedDefaultLogin.status === 200, 'Gateway terverifikasi harus membuka Portal Akun sebagai fallback aman.');
   const mapFreeNetwork = await fetch(`${baseUrl}/api/admin/portal-networks`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
-    body:JSON.stringify({ gatewayId:'test-gateway',networkAlias:'VLAN10',portalMode:'free' })
+    body:JSON.stringify({ gatewayId:'test-gateway',networkAlias:'VLAN10',portalMode:'free',networkDescription:'Free WiFi Pengunjung' })
   });
   assert(mapFreeNetwork.status === 200, 'Admin harus dapat memetakan VLAN ke Portal Free.');
   const dynamicFreeLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10`, { redirect:'manual' });
@@ -80,6 +81,11 @@ try {
   const token = gatewayUrl.searchParams.get('token');
   assert(gatewayUrl.hostname === '10.1.10.1' && gatewayUrl.port === '2060', 'Redirect harus menuju gateway lokal.');
   assert(token?.length === 64, 'Token WiFiDog harus acak dan tersedia.');
+  const cidrOnlyContext = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac:'02:00:00:00:10:03', ip:'10.1.10.12' };
+  const cidrOnlyResponse = await fetch(`${baseUrl}/api/captive/limited`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:cidrOnlyContext })
+  });
+  assert(cidrOnlyResponse.status === 200, 'Request lanjutan tanpa alias VLAN harus memakai routing subnet yang sudah dikenal.');
 
   const queryBefore = await request(`/free/auth/wifidogAuth/auth/?stage=query&gw_id=test-gateway&ip=10.1.10.10&mac=${mac}`);
   assert(queryBefore.body === 'Auth: 0\n', 'Client belum boleh aktif sebelum token dikonfirmasi gateway.');
@@ -203,6 +209,9 @@ try {
   const network = await networkResponse.json();
   assert(networkResponse.status === 200 && network.gateways.some(gateway=>gateway.id==='test-gateway') && network.gateways.some(gateway=>gateway.id==='branch-gateway'), 'Gateway harus ditemukan otomatis dari gw_id Ruijie.');
   assert(network.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_alias==='VLAN10' && route.portal_mode==='free'), 'API network harus mengembalikan routing portal per gateway.');
+  assert(network.portalNetworks.filter(route=>route.gateway_id==='test-gateway' && route.client_cidr==='10.1.10.0/24').length===1, 'Interface IP dan VLAN dengan subnet sama tidak boleh muncul sebagai dua routing.');
+  assert(network.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_description==='Free WiFi Pengunjung'), 'Deskripsi VLAN dari admin harus tersimpan per gateway.');
+  assert(network.portalNetworks.every(route=>!route.network_alias.includes('/')), 'API admin hanya boleh menampilkan alias VLAN, bukan subnet sebagai nama interface.');
   const projectResponse = await fetch(`${baseUrl}/api/admin/projects`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie }, body:JSON.stringify({ name:'Cabang Tes',location:'Denpasar' })
   });

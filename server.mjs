@@ -45,7 +45,8 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS portal_network_routes (
     gateway_id TEXT NOT NULL, network_alias TEXT NOT NULL,
-    client_cidr TEXT, portal_mode TEXT NOT NULL DEFAULT 'account'
+    client_cidr TEXT, network_description TEXT,
+    portal_mode TEXT NOT NULL DEFAULT 'account'
       CHECK(portal_mode IN ('account','free')),
     first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, configured_at TEXT,
     PRIMARY KEY(gateway_id,network_alias),
@@ -134,6 +135,7 @@ try { db.exec("ALTER TABLE access_logs ADD COLUMN gateway_id TEXT NOT NULL DEFAU
 try { db.exec("ALTER TABLE notifications ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE gateways ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved'))"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec('ALTER TABLE gateways ADD COLUMN approved_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE portal_network_routes ADD COLUMN network_description TEXT'); } catch { /* The column already exists after an upgrade. */ }
 
 // Versions before multi-gateway support used MAC as the only primary key.
 // Rebuild the table once so the same device can be tracked independently on
@@ -212,6 +214,26 @@ if (!db.prepare("SELECT name FROM schema_migrations WHERE name='gateway-approval
   `);
   db.prepare('INSERT INTO schema_migrations (name,applied_at) VALUES (?,?)').run('gateway-approval-v1', migratedAt);
 }
+const routeGroups = db.prepare(`SELECT gateway_id,client_cidr FROM portal_network_routes
+  WHERE client_cidr IS NOT NULL GROUP BY gateway_id,client_cidr`).all();
+for (const group of routeGroups) {
+  const routes = db.prepare(`SELECT * FROM portal_network_routes WHERE gateway_id=? AND client_cidr=?
+    ORDER BY configured_at IS NOT NULL DESC,configured_at DESC,last_seen_at DESC`).all(group.gateway_id, group.client_cidr);
+  const preferred = routes.find(route => /^(?:vlan|network|lan)[\s_-]*\d+$/i.test(route.network_alias));
+  if (!preferred) {
+    db.prepare('DELETE FROM portal_network_routes WHERE gateway_id=? AND client_cidr=?').run(group.gateway_id, group.client_cidr);
+    continue;
+  }
+  const source = routes[0];
+  const firstSeen = routes.map(route => route.first_seen_at).filter(Boolean).sort()[0] || preferred.first_seen_at;
+  const lastSeen = routes.map(route => route.last_seen_at).filter(Boolean).sort().at(-1) || preferred.last_seen_at;
+  const description = preferred.network_description || routes.find(route => route.network_description)?.network_description || null;
+  db.prepare(`UPDATE portal_network_routes SET portal_mode=?,configured_at=?,first_seen_at=?,last_seen_at=?,network_description=?
+    WHERE gateway_id=? AND network_alias=?`)
+    .run(source.portal_mode, source.configured_at || preferred.configured_at, firstSeen, lastSeen, description, group.gateway_id, preferred.network_alias);
+  db.prepare('DELETE FROM portal_network_routes WHERE gateway_id=? AND client_cidr=? AND network_alias<>?')
+    .run(group.gateway_id, group.client_cidr, preferred.network_alias);
+}
 db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,updated_at) VALUES (1,?,?,?,?,?)`)
   .run('Masuk ke internet cepat.', 'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.', 512, 'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.', new Date().toISOString());
 db.prepare(`UPDATE portal_settings SET welcome_title=?,welcome_text=?,updated_at=?
@@ -259,6 +281,12 @@ function adminCookie(value, maxAge = 60 * 60 * 24 * 7) { return `perumnet_admin=
 function requireAdmin(req, res) { if (!adminSession(req)) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return false; } return true; }
 async function body(req) { let value = ''; for await (const part of req) value += part; try { return value ? JSON.parse(value) : {}; } catch { throw new Error('JSON tidak valid.'); } }
 const networkAliasPattern = /^(?:vlan|network|lan)[\s_-]*\d+$/i;
+function normalizeNetworkAlias(value) {
+  const alias = String(value || '').trim();
+  if (!networkAliasPattern.test(alias)) return null;
+  const number = alias.match(/\d+/)?.[0];
+  return number ? `VLAN${number}` : null;
+}
 function ssidFromGateway(value = {}) {
   const candidates = [value.wlan_name, value.ssid_name, value.essid, value.wifi_name, value.ap_ssid, value.ssid, value.SSID];
   for (const candidate of candidates) {
@@ -268,10 +296,21 @@ function ssidFromGateway(value = {}) {
   return null;
 }
 function networkAliasFromGateway(value = {}) {
-  const candidates = [value.network_alias, value.network, value.ssid, value.SSID, value.vlan_name, value.vlan];
+  const candidates = [value.vlan_name, value.vlan, value.network_alias, value.network, value.ssid, value.SSID];
   for (const candidate of candidates) {
-    const alias = String(candidate || '').trim();
-    if (alias) return alias.slice(0, 128);
+    const alias = normalizeNetworkAlias(candidate);
+    if (alias) return alias;
+  }
+  return null;
+}
+function networkDescriptionFromGateway(value = {}) {
+  const candidates = [
+    value.vlan_description, value.vlan_desc, value.vlan_name, value.network_description, value.network_desc, value.network_name,
+    value.interface_description, value.interface_desc, value.remark, value.description
+  ];
+  for (const candidate of candidates) {
+    const description = String(candidate || '').trim();
+    if (description && !networkAliasPattern.test(description)) return description.slice(0, 160);
   }
   return null;
 }
@@ -288,6 +327,7 @@ function contextFrom(value = {}) {
     // Prefer explicit WLAN parameters and never persist that alias as the SSID.
     ssid: ssidFromGateway(value),
     network_alias: networkAliasFromGateway(value),
+    network_description: networkDescriptionFromGateway(value),
     network_slot: String(value.slot_num || '').trim().slice(0, 32) || null,
     login_url: value.login_url || null,
     logout_url: value.logout_url || null,
@@ -344,22 +384,36 @@ function observePortalNetwork(context = {}) {
   const gatewayId = ensureGateway(context);
   const alias = networkAliasFromGateway(context);
   const cidr = clientCidr(context.client_ip);
-  const networkKey = alias || cidr;
-  if (!networkKey || gatewayId === 'unassigned') return null;
-  const now = new Date().toISOString();
-  const existing = db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkKey);
-  if (existing) {
-    db.prepare('UPDATE portal_network_routes SET client_cidr=COALESCE(?,client_cidr),last_seen_at=? WHERE gateway_id=? AND network_alias=?')
-      .run(cidr, now, gatewayId, networkKey);
-    return { ...existing, client_cidr:cidr || existing.client_cidr, last_seen_at:now };
+  const description = networkDescriptionFromGateway(context);
+  if (gatewayId === 'unassigned') return null;
+  if (!alias) {
+    if (!cidr) return null;
+    const knownRoute = db.prepare(`SELECT * FROM portal_network_routes WHERE gateway_id=? AND client_cidr=?
+      ORDER BY configured_at IS NOT NULL DESC,last_seen_at DESC LIMIT 1`).get(gatewayId, cidr);
+    if (knownRoute) db.prepare('UPDATE portal_network_routes SET last_seen_at=? WHERE gateway_id=? AND network_alias=?')
+      .run(new Date().toISOString(), gatewayId, knownRoute.network_alias);
+    return knownRoute || null;
   }
-  const inherited = cidr ? db.prepare(`SELECT portal_mode,configured_at FROM portal_network_routes
-    WHERE gateway_id=? AND client_cidr=? ORDER BY configured_at IS NOT NULL DESC,last_seen_at DESC LIMIT 1`).get(gatewayId, cidr) : null;
+  const now = new Date().toISOString();
+  const sameSubnet = cidr ? db.prepare(`SELECT * FROM portal_network_routes WHERE gateway_id=? AND client_cidr=?
+    ORDER BY configured_at IS NOT NULL DESC,configured_at DESC,last_seen_at DESC`).all(gatewayId, cidr) : [];
+  const inherited = sameSubnet[0] || null;
+  const existing = db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, alias);
+  if (existing) {
+    db.prepare(`UPDATE portal_network_routes SET client_cidr=COALESCE(?,client_cidr),
+      network_description=COALESCE(?,network_description),last_seen_at=? WHERE gateway_id=? AND network_alias=?`)
+      .run(cidr, description, now, gatewayId, alias);
+    if (cidr) db.prepare('DELETE FROM portal_network_routes WHERE gateway_id=? AND client_cidr=? AND network_alias<>?')
+      .run(gatewayId, cidr, alias);
+    return db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, alias);
+  }
   const portalMode = inherited?.portal_mode || 'account';
   db.prepare(`INSERT INTO portal_network_routes
-    (gateway_id,network_alias,client_cidr,portal_mode,first_seen_at,last_seen_at,configured_at)
-    VALUES (?,?,?,?,?,?,?)`).run(gatewayId, networkKey, cidr, portalMode, now, now, inherited?.configured_at || null);
-  return db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkKey);
+    (gateway_id,network_alias,client_cidr,network_description,portal_mode,first_seen_at,last_seen_at,configured_at)
+    VALUES (?,?,?,?,?,?,?,?)`).run(gatewayId, alias, cidr, description || inherited?.network_description || null, portalMode, now, now, inherited?.configured_at || null);
+  if (cidr) db.prepare('DELETE FROM portal_network_routes WHERE gateway_id=? AND client_cidr=? AND network_alias<>?')
+    .run(gatewayId, cidr, alias);
+  return db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, alias);
 }
 function portalRouteForContext(context = {}, observe = false) {
   if (observe) return observePortalNetwork(context);
@@ -996,10 +1050,11 @@ async function api(req, res, url) {
       FROM gateways g JOIN projects p ON p.id=g.project_id
       LEFT JOIN clients c ON c.gateway_id=g.id
       GROUP BY g.id ORDER BY CASE WHEN g.approval_status='pending' AND g.id<>'unassigned' THEN 0 WHEN g.id='unassigned' THEN 2 ELSE 1 END,p.name,g.name`).all();
-    const portalNetworks = db.prepare(`SELECT n.gateway_id,n.network_alias,n.client_cidr,n.portal_mode,
+    const portalNetworks = db.prepare(`SELECT n.gateway_id,n.network_alias,n.client_cidr,n.network_description,n.portal_mode,
       n.first_seen_at,n.last_seen_at,n.configured_at,g.name AS gateway_name,g.project_id,g.approval_status,p.name AS project_name
       FROM portal_network_routes n JOIN gateways g ON g.id=n.gateway_id JOIN projects p ON p.id=g.project_id
-      ORDER BY p.name,g.name,n.network_alias`).all();
+      WHERE UPPER(n.network_alias) LIKE 'VLAN%'
+      ORDER BY p.name,g.name,CAST(SUBSTR(n.network_alias,5) AS INTEGER)`).all();
     const blockedGateways = db.prepare('SELECT gateway_id,blocked_at,reason FROM gateway_blocks ORDER BY blocked_at DESC').all();
     const offlineDeadline = new Date(Date.now() - (Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20) * 60 * 1000).toISOString();
     return json(res, 200, {
@@ -1073,16 +1128,15 @@ async function api(req, res, url) {
     if (!requireAdmin(req,res)) return;
     const payload = await body(req);
     const gatewayId = gatewayKey(payload.gatewayId);
-    const networkAlias = String(payload.networkAlias || '').trim().slice(0,128);
+    const networkAlias = normalizeNetworkAlias(payload.networkAlias);
     const portalMode = payload.portalMode === 'free' ? 'free' : payload.portalMode === 'account' ? 'account' : '';
+    const networkDescription = String(payload.networkDescription || '').trim().slice(0,160) || null;
     if (gatewayId === 'unassigned' || !networkAlias || !portalMode) return json(res, 400, { error:'Gateway, jaringan, dan jenis portal wajib dipilih.' });
     const routeRecord = db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkAlias);
     if (!routeRecord) return json(res, 404, { error:'Jaringan belum terdeteksi pada gateway ini.' });
     const now = new Date().toISOString();
-    db.prepare('UPDATE portal_network_routes SET portal_mode=?,configured_at=? WHERE gateway_id=? AND network_alias=?')
-      .run(portalMode, now, gatewayId, networkAlias);
-    if (routeRecord.client_cidr) db.prepare(`UPDATE portal_network_routes SET portal_mode=?,configured_at=?
-      WHERE gateway_id=? AND client_cidr=?`).run(portalMode, now, gatewayId, routeRecord.client_cidr);
+    db.prepare('UPDATE portal_network_routes SET portal_mode=?,network_description=?,configured_at=? WHERE gateway_id=? AND network_alias=?')
+      .run(portalMode, networkDescription, now, gatewayId, networkAlias);
     return json(res, 200, { network:db.prepare('SELECT * FROM portal_network_routes WHERE gateway_id=? AND network_alias=?').get(gatewayId, networkAlias) });
   }
   if (route === '/api/admin/export.csv' && req.method === 'GET') {
