@@ -6,6 +6,43 @@ const captiveContext = Object.fromEntries(new URLSearchParams(location.search).e
 const isAdminView = location.pathname === '/admin' || location.pathname === '/admin/';
 const isFreeView = location.pathname === '/free' || location.pathname === '/free/' || location.pathname.startsWith('/free/auth/wifidogAuth/login');
 const isGatewayReviewView = location.pathname === '/gateway-review' || location.pathname === '/gateway-review/';
+function mountAdminUsersPage() {
+  if($('#users-tab')) return;
+  $('#network-tab').insertAdjacentHTML('beforebegin',`
+    <div id="users-tab" class="tab-content">
+      <section class="user-management-heading">
+        <div><span class="eyebrow">Database pelanggan terdaftar</span><h2>Data Pengguna</h2><p>Kelola data diri yang masuk melalui formulir portal. Perubahan di halaman ini langsung digunakan pada login akun dan file CSV.</p></div>
+        <button class="primary-button add-user-button" id="add-admin-user" type="button"><span>＋</span> Tambah Pengguna</button>
+      </section>
+      <div class="profile-stats">
+        <article><span class="profile-stat-icon total">◎</span><div><small>Total Pengguna</small><b id="profile-total">0</b><em>Seluruh akun yang mengisi data</em></div></article>
+        <article><span class="profile-stat-icon verified">✓</span><div><small>Email Terverifikasi</small><b id="profile-verified">0</b><em>Sudah dapat login ke portal</em></div></article>
+        <article><span class="profile-stat-icon review">!</span><div><small>Perlu Ditinjau</small><b id="profile-unverified">0</b><em>Email belum terverifikasi</em></div></article>
+      </div>
+      <section class="profile-management-card">
+        <header class="profile-management-header"><div><h3>Database Data Diri</h3><p>Halaman ini tidak menampilkan perangkat Free/Limited atau perangkat yang belum login.</p></div><div class="profile-header-actions"><button class="outline-button table-refresh-button" id="users-refresh" type="button" aria-busy="false"><svg class="refresh-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg><span>Refresh</span></button><button class="outline-button" id="users-export-csv" type="button">⇩ Ekspor CSV</button></div></header>
+        <div class="profile-filter" id="profile-verification-filter" role="tablist" aria-label="Filter status verifikasi"><button class="active" type="button" data-verification="all">Semua</button><button type="button" data-verification="verified">Terverifikasi</button><button type="button" data-verification="unverified">Perlu Ditinjau</button></div>
+        <div class="profile-tools"><label class="search"><span>⌕</span><input id="profile-search" type="search" placeholder="Cari nama, email, nomor HP, atau alamat..." /></label><label class="page-size-control">Baris per halaman<select id="profile-page-size"><option value="10" selected>10</option><option value="25">25</option><option value="50">50</option><option value="100">100</option></select></label></div>
+        <div class="profile-table-scroll"><table class="profile-table"><thead><tr><th>Nama Pengguna</th><th>Email</th><th>Nomor HP</th><th>Alamat</th><th>Verifikasi</th><th>Aktivitas Terakhir</th><th>Terdaftar</th><th>Aksi</th></tr></thead><tbody id="profile-rows"><tr class="empty-row"><td colspan="8" class="empty-state">Memuat data pengguna…</td></tr></tbody></table></div>
+        <footer class="table-footer profile-footer"><span id="profile-result-count">Memuat data pengguna…</span><span class="profile-sync-status" id="profile-sync-status">Belum disinkronkan</span><nav class="pagination" aria-label="Pagination data pengguna"><button id="profile-page-prev" type="button" aria-label="Halaman sebelumnya">←</button><b id="profile-page-indicator">1 / 1</b><button id="profile-page-next" type="button" aria-label="Halaman berikutnya">→</button></nav></footer>
+      </section>
+      <section class="admin-user-modal" id="admin-user-modal" aria-hidden="true">
+        <button class="admin-user-backdrop" type="button" data-close-user-editor aria-label="Tutup form pengguna"></button>
+        <div class="admin-user-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-user-modal-title">
+          <header><div><span class="eyebrow" id="admin-user-modal-eyebrow">Perbaiki data pelanggan</span><h3 id="admin-user-modal-title">Edit Data Pengguna</h3></div><button class="modal-close-button" type="button" data-close-user-editor aria-label="Tutup">×</button></header>
+          <form id="admin-user-form">
+            <input id="admin-user-id" name="userId" type="hidden" />
+            <div class="admin-user-grid"><label>Nama lengkap<input id="admin-user-name" name="fullName" maxlength="120" placeholder="Nama lengkap pelanggan" required /></label><label>Email<input id="admin-user-email" name="email" type="email" maxlength="254" placeholder="nama@email.com" required /></label><label>Nomor HP / WhatsApp<input id="admin-user-phone" name="phone" maxlength="40" placeholder="08xx xxxx xxxx" required /></label><label class="admin-user-address">Alamat<textarea id="admin-user-address" name="address" maxlength="500" placeholder="Kota atau alamat tempat tinggal" required></textarea></label><label class="admin-user-password" id="admin-user-password-field">Kata sandi awal<input id="admin-user-password" name="password" type="password" minlength="8" placeholder="Minimal 8 karakter" autocomplete="new-password" /><small>Akun yang ditambahkan admin langsung berstatus terverifikasi.</small></label></div>
+            <div class="admin-user-verification" id="admin-user-verification"><span class="verification-dot"></span><div><b>Status email</b><small id="admin-user-verification-copy">Terverifikasi</small></div></div>
+            <p class="admin-user-note">Mengubah email juga mengubah email yang digunakan pelanggan untuk login berikutnya. Kata sandi lama tidak berubah saat data diedit.</p>
+            <p class="inline-feedback" id="admin-user-feedback" role="status"></p>
+            <footer><button class="outline-button" type="button" data-close-user-editor>Batal</button><button class="primary-button" id="save-admin-user" type="submit">Simpan Data <span>→</span></button></footer>
+          </form>
+        </div>
+      </section>
+    </div>`);
+}
+mountAdminUsersPage();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
 if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title='PerumNet — Internet Gratis'; }
 if (isGatewayReviewView) { document.body.classList.add('account-action-view'); $('#portal-screen').style.display='none'; document.title='PerumNet — Verifikasi Gateway'; }
@@ -59,7 +96,10 @@ let networkCatalog = { projects:[], gateways:[], portalNetworks:[], blockedGatew
 const adminScope = { projectId:'', gatewayId:'' };
 const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
 const adminMonitoring = { range:'24h', loading:false };
+const adminUsers = { page:1, limit:10, verification:'all', search:'', total:0, totalPages:1 };
+const registeredUsers = [];
 let leadsLoading = false;
+let usersLoading = false;
 function scopeQuery(extra={}) {
   const params = new URLSearchParams();
   if (adminScope.gatewayId) params.set('gatewayId',adminScope.gatewayId);
@@ -142,7 +182,7 @@ async function refreshAdminData() {
   updateAdminRefreshStatus('loading');
   adminRefreshPromise=(async()=>{
     await loadAdminNetwork();
-    const results=await Promise.allSettled([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]);
+    const results=await Promise.allSettled([loadAdminLeads(),loadAdminMonitoring(),loadAdminUsers(),loadNotifications()]);
     const rejected=results.find(result=>result.status==='rejected');
     if(rejected) throw rejected.reason;
     updateAdminRefreshStatus('live');
@@ -197,6 +237,7 @@ function startMonitoringPolling() {
   clearInterval(analyticsTimer);
   analyticsTimer=setInterval(()=>{
     if(document.visibilityState==='visible' && screens.dashboard.classList.contains('active') && $('#leads-tab').classList.contains('active')) loadAdminMonitoring({ silent:true });
+    else if(document.visibilityState==='visible' && screens.dashboard.classList.contains('active') && $('#users-tab').classList.contains('active')) loadAdminUsers({ silent:true });
   },10000);
 }
 const formatBytes = value => {
@@ -338,6 +379,77 @@ function renderLeads() {
   $('#page-prev').disabled=adminTable.page<=1;
   $('#page-next').disabled=adminTable.page>=adminTable.totalPages;
 }
+function renderRegisteredUsers() {
+  $('#profile-rows').innerHTML=registeredUsers.map(user=>{
+    const initials=user.full_name.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase();
+    const activity=user.last_seen_at
+      ? `<span class="profile-activity"><b>${escapeHtml(relativeTime(user.last_seen_at))}</b><small>${escapeHtml(user.project_name || 'Project tidak tersedia')} · ${escapeHtml(user.gateway_name || 'Gateway tidak tersedia')}</small><em>${Number(user.device_count || 0)} perangkat · ${Number(user.login_count || 0)} login</em></span>`
+      : '<span class="profile-activity empty"><b>Belum pernah login</b><small>Akun belum terhubung ke perangkat</small></span>';
+    return `<tr><td data-label="Nama"><div class="profile-user-cell"><span class="avatar">${escapeHtml(initials || 'PN')}</span><div><b>${escapeHtml(user.full_name)}</b><small>ID ${escapeHtml(user.id.slice(0,8))}</small></div></div></td><td data-label="Email"><span class="profile-email">${escapeHtml(user.email)}</span></td><td data-label="Nomor HP">${escapeHtml(user.phone_number)}</td><td data-label="Alamat" class="profile-address-cell">${escapeHtml(user.address)}</td><td data-label="Verifikasi"><span class="verification-badge ${user.is_verified ? 'verified':'unverified'}">${user.is_verified ? '✓ Terverifikasi':'! Perlu ditinjau'}</span></td><td data-label="Aktivitas">${activity}</td><td data-label="Terdaftar">${escapeHtml(formatTime(user.created_at))}</td><td data-label="Aksi"><div class="profile-row-actions"><button class="edit-profile" type="button" data-user-id="${escapeHtml(user.id)}">Edit</button><button class="delete-profile" type="button" data-user-id="${escapeHtml(user.id)}">Hapus</button></div></td></tr>`;
+  }).join('') || '<tr class="empty-row"><td colspan="8" class="empty-state">Tidak ada pengguna pada pencarian atau filter ini.</td></tr>';
+  const start=adminUsers.total ? (adminUsers.page-1)*adminUsers.limit+1 : 0;
+  const end=Math.min(adminUsers.page*adminUsers.limit,adminUsers.total);
+  $('#profile-result-count').textContent=`Menampilkan ${start}–${end} dari ${adminUsers.total} pengguna`;
+  $('#profile-page-indicator').textContent=`${adminUsers.page} / ${adminUsers.totalPages}`;
+  $('#profile-page-prev').disabled=adminUsers.page<=1;
+  $('#profile-page-next').disabled=adminUsers.page>=adminUsers.totalPages;
+}
+async function loadAdminUsers({ silent=false }={}) {
+  if(!isAdminView || usersLoading) return;
+  usersLoading=true;
+  const refreshButton=$('#users-refresh');
+  try {
+    const query=new URLSearchParams({ page:String(adminUsers.page),limit:String(adminUsers.limit),verification:adminUsers.verification });
+    if(adminUsers.search) query.set('search',adminUsers.search);
+    const result=await api(`/api/admin/users?${query}`);
+    registeredUsers.splice(0,registeredUsers.length,...result.users);
+    Object.assign(adminUsers,result.pagination);
+    $('#profile-total').textContent=result.stats.total;
+    $('#profile-verified').textContent=result.stats.verified;
+    $('#profile-unverified').textContent=result.stats.unverified;
+    $('#profile-sync-status').textContent=`Sinkron ${refreshClock()}`;
+    $('#profile-sync-status').classList.remove('error');
+    renderRegisteredUsers();
+    updateAdminRefreshStatus('live');
+  } catch(error) {
+    $('#profile-sync-status').textContent='Sinkronisasi gagal';
+    $('#profile-sync-status').classList.add('error');
+    if(!silent) throw error;
+  } finally {
+    usersLoading=false;
+    setRefreshLoading(refreshButton,false);
+  }
+}
+function openAdminUserEditor(user=null) {
+  const creating=!user;
+  const form=$('#admin-user-form');
+  form.reset();
+  $('#admin-user-id').value=user?.id || '';
+  $('#admin-user-name').value=user?.full_name || '';
+  $('#admin-user-email').value=user?.email || '';
+  $('#admin-user-phone').value=user?.phone_number || '';
+  $('#admin-user-address').value=user?.address || '';
+  $('#admin-user-password').required=creating;
+  $('#admin-user-password-field').hidden=!creating;
+  $('#admin-user-verification').hidden=creating;
+  $('#admin-user-modal-eyebrow').textContent=creating ? 'Buat akun dari dashboard':'Perbaiki data pelanggan';
+  $('#admin-user-modal-title').textContent=creating ? 'Tambah Pengguna':'Edit Data Pengguna';
+  $('#admin-user-verification').classList.toggle('unverified',!creating && !user.is_verified);
+  $('#admin-user-verification-copy').textContent=user?.is_verified ? 'Terverifikasi' : 'Belum terverifikasi';
+  $('.admin-user-note').textContent=creating
+    ? 'Akun yang dibuat administrator langsung terverifikasi dan dapat dipakai login menggunakan email serta kata sandi yang dibuat.'
+    : 'Mengubah email juga mengubah email yang digunakan pelanggan untuk login berikutnya. Kata sandi lama tidak berubah saat data diedit.';
+  $('#admin-user-feedback').textContent='';
+  $('#admin-user-modal').classList.add('open');
+  $('#admin-user-modal').setAttribute('aria-hidden','false');
+  document.body.classList.add('admin-modal-open');
+  setTimeout(()=>$('#admin-user-name').focus(),80);
+}
+function closeAdminUserEditor() {
+  $('#admin-user-modal').classList.remove('open');
+  $('#admin-user-modal').setAttribute('aria-hidden','true');
+  document.body.classList.remove('admin-modal-open');
+}
 function projectOptions(selected='') { return networkCatalog.projects.map(project=>`<option value="${escapeHtml(project.id)}" ${project.id===selected?'selected':''}>${escapeHtml(project.name)}</option>`).join(''); }
 function managedGateways() { return networkCatalog.gateways.filter(gateway=>gateway.id!=='unassigned'); }
 function visibleGateways() { return managedGateways().filter(gateway=>gateway.approval_status==='approved'); }
@@ -399,9 +511,22 @@ async function loadAdminNetwork() {
   $('#network-pending-total').textContent=managedGateways().filter(gateway=>gateway.approval_status!=='approved').length;
   $('#gateway-sync-time').textContent=`Disinkronkan ${new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}`;
 }
+function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
+  const tab=['leads','users','network','settings'].includes(requestedTab) ? requestedTab : 'leads';
+  document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.tab===tab));
+  document.querySelectorAll('.tab-content').forEach(content=>content.classList.toggle('active',content.id===`${tab}-tab`));
+  $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab];
+  if(updateHash) history.replaceState({},'',tab==='leads' ? '/admin' : `/admin#${tab}`);
+  if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message));
+  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true })]);
+  if(tab==='users') loadAdminUsers({ silent:true });
+  if(tab!=='users') closeAdminUserEditor();
+  setNotificationPanel(false);
+  setSidebar(false);
+}
 renderLeads();
 loadPortalSettings();
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); activateAdminTab(location.hash.slice(1) || 'leads',{ updateHash:false }); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
@@ -440,8 +565,8 @@ $('#notification-toggle').onclick = event => { event.stopPropagation(); setNotif
 $('#notification-panel').onclick = event => event.stopPropagation();
 $('#notification-read-all').onclick = async () => { try { await api(`/api/admin/notifications/read${scopeQuery()}`, {}); await loadNotifications(); } catch (error) { alert(error.message); } };
 document.addEventListener('click', () => { setNotificationPanel(false); setWorkspaceMenu(false); });
-document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => { document.querySelectorAll('.nav-item').forEach(i=>i.classList.remove('active')); item.classList.add('active'); const tab=item.dataset.tab; document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active')); $(`#${tab}-tab`).classList.add('active'); $('#dash-title').textContent={ leads:'Data Pengunjung',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab]; if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message)); if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true })]); setNotificationPanel(false); setSidebar(false); });
-document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('.workspace-switcher').classList.contains('open')) setWorkspaceMenu(false); else if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
+document.querySelectorAll('.nav-item').forEach(item => item.onclick = () => activateAdminTab(item.dataset.tab));
+document.addEventListener('keydown',event=>{ if(event.key==='Escape'){ if($('#admin-user-modal').classList.contains('open')) closeAdminUserEditor(); else if($('.workspace-switcher').classList.contains('open')) setWorkspaceMenu(false); else if($('#notification-panel').classList.contains('open')) setNotificationPanel(false); else if(document.body.classList.contains('sidebar-open')) setSidebar(false); else if(screens.forgotPassword.classList.contains('active')) closeForgotPassword(); else if(screens.userLogin.classList.contains('active')) showAccessChoice(); } });
 $('#scope-project').addEventListener('change',event=>applyAdminScope(event.target.value,'').catch(error=>alert(error.message)));
 $('#scope-gateway').addEventListener('change',event=>applyAdminScope(adminScope.projectId,event.target.value).catch(error=>alert(error.message)));
 $('#project-form').addEventListener('submit',async event=>{ event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button'),feedback=$('#project-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent=''; try { await api('/api/admin/projects',{ name:data.get('name'),location:data.get('location') }); form.reset(); feedback.textContent='Project berhasil ditambahkan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
@@ -491,6 +616,57 @@ $('#page-size').addEventListener('change',event=>{ adminTable.limit=Number(event
 $('#page-prev').onclick=()=>{ if(adminTable.page<=1) return; adminTable.page-=1; loadAdminLeads().catch(error=>alert(error.message)); };
 $('#page-next').onclick=()=>{ if(adminTable.page>=adminTable.totalPages) return; adminTable.page+=1; loadAdminLeads().catch(error=>alert(error.message)); };
 $('#table-refresh').onclick=()=>refreshTableData().catch(error=>alert(error.message));
-$('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, histori monitoring, dan riwayat akses akan dihapus.' : `Perangkat, histori monitoring, dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
+$('#add-admin-user').onclick=()=>openAdminUserEditor();
+document.querySelectorAll('[data-close-user-editor]').forEach(button=>button.onclick=closeAdminUserEditor);
+$('#users-refresh').onclick=event=>{ if(usersLoading) return; setRefreshLoading(event.currentTarget,true); loadAdminUsers().catch(error=>alert(error.message)); };
+$('#profile-verification-filter').onclick=event=>{ const button=event.target.closest('[data-verification]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#profile-verification-filter [data-verification]').forEach(item=>item.classList.toggle('active',item===button)); adminUsers.verification=button.dataset.verification; adminUsers.page=1; loadAdminUsers().catch(error=>alert(error.message)); };
+$('#profile-search').oninput=event=>{ clearTimeout(searchTimer); adminUsers.search=event.target.value.trim(); adminUsers.page=1; searchTimer=setTimeout(()=>loadAdminUsers().catch(error=>alert(error.message)),280); };
+$('#profile-page-size').onchange=event=>{ adminUsers.limit=Number(event.target.value)||10; adminUsers.page=1; loadAdminUsers().catch(error=>alert(error.message)); };
+$('#profile-page-prev').onclick=()=>{ if(adminUsers.page<=1) return; adminUsers.page-=1; loadAdminUsers().catch(error=>alert(error.message)); };
+$('#profile-page-next').onclick=()=>{ if(adminUsers.page>=adminUsers.totalPages) return; adminUsers.page+=1; loadAdminUsers().catch(error=>alert(error.message)); };
+$('#profile-rows').onclick=async event=>{
+  const editButton=event.target.closest('.edit-profile'),deleteButton=event.target.closest('.delete-profile');
+  if(!editButton && !deleteButton) return;
+  const userId=(editButton || deleteButton).dataset.userId;
+  const user=registeredUsers.find(item=>item.id===userId);
+  if(!user) return;
+  if(editButton){ openAdminUserEditor(user); return; }
+  const detail=user.device_count
+    ? `Akun dan ${user.device_count} perangkat terkait akan dihapus. Semua sesi WiFiDog aktif juga akan dicabut.`
+    : 'Akun akan dihapus permanen dari database dan file CSV.';
+  if(!confirm(`Hapus pengguna ${user.full_name}?\n\n${detail}`)) return;
+  deleteButton.disabled=true;
+  try {
+    await api('/api/admin/users',{ userId:user.id },'DELETE');
+    await Promise.all([loadAdminUsers(),loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]);
+    alert('Data pengguna berhasil dihapus dari database dan ekspor CSV.');
+  } catch(error) { alert(error.message); deleteButton.disabled=false; }
+};
+$('#admin-user-form').onsubmit=async event=>{
+  event.preventDefault();
+  const form=event.currentTarget,data=new FormData(form),userId=data.get('userId'),creating=!userId;
+  const button=$('#save-admin-user'),old=button.innerHTML,feedback=$('#admin-user-feedback');
+  const payload={ userId,fullName:data.get('fullName'),email:data.get('email'),phone:data.get('phone'),address:data.get('address') };
+  if(creating) payload.password=data.get('password');
+  button.disabled=true; button.innerHTML=creating ? 'Membuat akun…':'Menyimpan…'; feedback.textContent='';
+  try {
+    await api('/api/admin/users',payload,creating ? 'POST':'PATCH');
+    await Promise.all([loadAdminUsers(),loadAdminLeads()]);
+    closeAdminUserEditor();
+  } catch(error) { feedback.textContent=error.message; }
+  finally { button.disabled=false; button.innerHTML=old; }
+};
+$('#users-export-csv').onclick=async event=>{
+  const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…';
+  try {
+    const response=await fetch('/api/admin/export.csv',{ credentials:'same-origin' });
+    if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.');
+    const href=URL.createObjectURL(await response.blob()),anchor=document.createElement('a');
+    anchor.href=href; anchor.download='database-pengguna-perumnet.csv'; anchor.click();
+    setTimeout(()=>URL.revokeObjectURL(href),1000);
+  } catch(error) { alert(error.message); }
+  finally { button.disabled=false; button.textContent=old; }
+};
+$('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, histori monitoring, dan riwayat akses akan dihapus.' : `Perangkat, histori monitoring, dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminUsers(),loadAdminMonitoring(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
 $('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
 $('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const accountSsid=$('#setting-account-ssid').value.trim() || '@PERUMNET_WiFi', freeSsid=$('#setting-free-ssid').value.trim() || '@PERUMNET_FreeWiFi', title=$('#setting-title').value || 'Masuk ke internet cepat.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { accountSsid,freeSsid,welcomeTitle:title,welcomeText:copy,termsText:terms,limitedBandwidthKbps:bandwidth }); portalSettings={ ...portalSettings,account_ssid:accountSsid,free_ssid:freeSsid,default_ssid:accountSsid,welcome_title:title,welcome_text:copy,terms_text:terms,limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || accountSsid); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#account-profile-ssid').textContent=accountSsid; $('#free-profile-ssid').textContent=freeSsid; $('#preview-account-ssid').textContent=accountSsid; $('#preview-free-ssid').textContent=freeSsid; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });

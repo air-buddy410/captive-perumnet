@@ -21,6 +21,7 @@ assert.match(html, /id="sidebar-toggle"/, 'Dashboard harus menyediakan tombol na
 assert.match(html, /id="workspace-toggle"[^>]*aria-haspopup="menu"[^>]*aria-expanded="false"/, 'Kartu workspace harus menjadi tombol pemilih project dan gateway yang accessible.');
 assert.match(html, /id="workspace-menu"[^>]*aria-label="Pilih project atau gateway"/, 'Sidebar harus menyediakan menu pemilih jaringan yang nyata.');
 assert.match(html, /id="workspace-options"[^>]*role="menu"/, 'Pilihan workspace harus dirender sebagai menu interaktif.');
+assert.match(html, /data-tab="users"[\s\S]*Data Pengguna/, 'Sidebar admin harus menyediakan halaman Data Pengguna terpisah.');
 assert.match(html, /rel="icon"[^>]*perumnet-favicon\.png/, 'Portal harus menggunakan favicon PerumNet.');
 assert.ok(favicon.length > 1000 && favicon.subarray(1,4).toString() === 'PNG', 'Aset favicon harus berupa PNG yang valid.');
 assert.match(html, /class="sidebar-brand brand brand-light" href="https:\/\/hotspot\.perumnet\.id"/, 'Logo sidebar harus kembali ke portal hotspot.');
@@ -74,8 +75,12 @@ assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\
 assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifikasi pelanggan dari server.');
 assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
 assert.match(app, /setInterval\(\(\)=>\{[\s\S]*loadAdminLeads\(\{ silent:true \}\)[\s\S]*\},5000\)/, 'Monitoring client harus diperbarui otomatis setiap lima detik.');
-assert.match(app, /async function refreshAdminData\(\)[\s\S]*loadAdminNetwork\(\)[\s\S]*Promise\.allSettled\(\[loadAdminLeads\(\),loadAdminMonitoring\(\),loadNotifications\(\)\]\)/, 'Refresh global harus menyinkronkan jaringan, tabel, grafik, dan notifikasi.');
+assert.match(app, /async function refreshAdminData\(\)[\s\S]*loadAdminNetwork\(\)[\s\S]*Promise\.allSettled\(\[loadAdminLeads\(\),loadAdminMonitoring\(\),loadAdminUsers\(\),loadNotifications\(\)\]\)/, 'Refresh global harus menyinkronkan jaringan, tabel, database pengguna, grafik, dan notifikasi.');
 assert.match(app, /async function refreshTableData\(\)[\s\S]*tableRefreshPromise=loadAdminLeads\(\)/, 'Refresh tabel harus memperbarui data klien tanpa memuat ulang halaman.');
+assert.match(app, /function mountAdminUsersPage\(\)/, 'UI harus membangun halaman CRUD pengguna dalam session admin yang sama.');
+assert.match(app, /id="admin-user-form"/, 'Halaman pengguna harus menyediakan form tambah dan edit data.');
+assert.match(app, /api\('\/api\/admin\/users',payload,creating \? 'POST':'PATCH'\)/, 'Form pengguna harus membedakan pembuatan dan pembaruan data.');
+assert.match(app, /api\('\/api\/admin\/users',\{ userId:user\.id \},'DELETE'\)/, 'Halaman pengguna harus dapat menghapus akun berdasarkan ID.');
 assert.match(app, /\/api\/admin\/export\.csv/, 'Ekspor CSV harus dibuat server agar perangkat Free tidak ikut terunduh.');
 assert.match(app, /\/api\/admin\/monitoring/, 'Dashboard harus membaca agregasi monitoring historis dari server.');
 assert.match(app, /renderGlobalTrafficChart/, 'UI harus merender grafik gabungan tanpa library eksternal.');
@@ -118,5 +123,8 @@ assert.match(css, /\.workspace-switcher\.open \.workspace-menu/, 'Menu workspace
 assert.match(css, /\.workspace-option\.active/, 'Project atau gateway terpilih harus memiliki state visual aktif.');
 assert.match(css, /body\.admin-view \.analytics-card\{width:100%;min-width:0;max-width:100%/, 'Panel grafik mobile harus dibatasi pada lebar viewport.');
 assert.match(css, /\.is-loading \.refresh-icon\{animation:refresh-spin/, 'Tombol refresh harus memiliki indikator loading yang jelas.');
+assert.match(css, /\.profile-management-card/, 'Halaman CRUD pengguna harus memiliki kartu database yang responsif.');
+assert.match(css, /\.admin-user-modal/, 'Tambah dan edit pengguna harus menggunakan modal admin yang rapi.');
+assert.match(css, /body\.admin-view table\.profile-table\{display:block;width:100%;min-width:0;max-width:100%/, 'Tabel pengguna harus berubah menjadi kartu pada mobile.');
 
 console.log('Responsive UI contract: PASS');
