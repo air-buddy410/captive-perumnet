@@ -24,6 +24,13 @@ assert.match(html, /class="sidebar-brand brand brand-light" href="https:\/\/hots
 assert.match(html, /class="nav-icon"[^>]*viewBox="0 0 24 24"/, 'Sidebar harus memakai ikon SVG yang konsisten.');
 assert.match(html, /class="header-action"[^>]*id="notification-toggle"[^>]*title="Notifikasi"/, 'Header admin harus memakai tombol notifikasi SVG.');
 assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel aktivitas pelanggan.');
+assert.match(html, /id="category-filter"/, 'Dashboard harus memisahkan kategori pengguna terdaftar, Free, dan belum login.');
+assert.match(html, /id="page-size"[^>]*><option value="10" selected>10<\/option><option value="25">25<\/option><option value="50">50<\/option><option value="100">100<\/option>/, 'Tabel harus menyediakan pilihan 10 sampai 100 data per halaman.');
+assert.match(html, /id="monitoring-status"/, 'Dashboard harus menampilkan status monitoring real-time.');
+assert.match(html, /Bandwidth Saat Ini/, 'Tabel admin harus menampilkan bandwidth setiap pengguna.');
+assert.match(html, /Durasi Login/, 'Tabel admin harus menampilkan durasi login.');
+assert.match(html, /Data Terpakai/, 'Tabel admin harus menampilkan total penggunaan data.');
+assert.match(html, /Hanya akun yang mengisi data\. Free\/Limited tidak disertakan\./, 'Admin harus menjelaskan bahwa CSV mengecualikan akses Free.');
 assert.match(html, /data-tab="network"/, 'Dashboard harus menyediakan pengelolaan project dan gateway.');
 assert.match(html, /id="scope-project"/, 'Dashboard harus menyediakan filter project global.');
 assert.match(html, /id="scope-gateway"/, 'Dashboard harus menyediakan filter gateway global.');
@@ -50,6 +57,9 @@ assert.match(app, /networkAliasPattern/, 'UI harus menolak network alias sebagai
 assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\.wifi_name/, 'UI harus memprioritaskan parameter WLAN Ruijie.');
 assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifikasi pelanggan dari server.');
 assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
+assert.match(app, /setInterval\(\(\)=>\{[\s\S]*loadAdminLeads\(\{ silent:true \}\)[\s\S]*\},5000\)/, 'Monitoring client harus diperbarui otomatis setiap lima detik.');
+assert.match(app, /\/api\/admin\/export\.csv/, 'Ekspor CSV harus dibuat server agar perangkat Free tidak ikut terunduh.');
+assert.match(app, /category:'all'.*totalPages:1/, 'UI harus menyimpan state pagination dan kategori tabel.');
 assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus client harus dibatasi pada gateway yang tepat.');
 assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
 assert.match(app, /\/api\/auth\/forgot-password/, 'UI harus dapat meminta email reset kata sandi.');
@@ -61,9 +71,10 @@ assert.match(css, /\.notification-panel\.open/, 'Panel notifikasi harus memiliki
 assert.match(css, /\.scope-bar/, 'Filter scope harus memiliki layout responsif khusus.');
 assert.match(css, /\.gateway-grid/, 'Kartu gateway harus memiliki layout desktop dan mobile.');
 assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');
-const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1580px}');
+const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1880px}');
 const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:block;width:100%;min-width:0;max-width:100%');
-assert.ok(mobileGatewayTableReset > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel multi-gateway.');
+const finalMobileTableReset = css.lastIndexOf('body.admin-view table{min-width:0}');
+assert.ok(Math.max(mobileGatewayTableReset,finalMobileTableReset) > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel monitoring.');
 assert.match(css, /body\.admin-view \.stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'Statistik mobile harus tampil tanpa carousel horizontal yang terpotong.');
 
 console.log('Responsive UI contract: PASS');

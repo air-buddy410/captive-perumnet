@@ -46,6 +46,9 @@ db.exec(`
     user_id TEXT, access_type TEXT CHECK(access_type IN ('high_speed','limited')),
     auth_status TEXT NOT NULL DEFAULT 'pending' CHECK(auth_status IN ('pending','authorized')),
     first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, authorized_until TEXT,
+    session_started_at TEXT, last_counter_at TEXT,
+    incoming_bytes INTEGER NOT NULL DEFAULT 0, outgoing_bytes INTEGER NOT NULL DEFAULT 0,
+    incoming_bps REAL, outgoing_bps REAL,
     PRIMARY KEY(gateway_id,mac_address),
     FOREIGN KEY(user_id) REFERENCES users(id),
     FOREIGN KEY(gateway_id) REFERENCES gateways(id)
@@ -56,6 +59,8 @@ db.exec(`
     access_type TEXT NOT NULL CHECK(access_type IN ('high_speed','limited')),
     created_at TEXT NOT NULL, login_expires_at TEXT NOT NULL,
     authorized_at TEXT, authorized_until TEXT, revoked_at TEXT,
+    last_counter_at TEXT, incoming_bytes INTEGER NOT NULL DEFAULT 0,
+    outgoing_bytes INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(user_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_captive_sessions_mac ON captive_sessions(mac_address);
@@ -86,6 +91,15 @@ try { db.exec("ALTER TABLE portal_settings ADD COLUMN default_ssid TEXT NOT NULL
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN account_ssid TEXT NOT NULL DEFAULT '@PERUMNET_WiFi'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN free_ssid TEXT NOT NULL DEFAULT '@PERUMNET_FreeWiFi'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec('ALTER TABLE clients ADD COLUMN authorized_until TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN session_started_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN last_counter_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN incoming_bytes INTEGER NOT NULL DEFAULT 0'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN outgoing_bytes INTEGER NOT NULL DEFAULT 0'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN incoming_bps REAL'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE clients ADD COLUMN outgoing_bps REAL'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE captive_sessions ADD COLUMN last_counter_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE captive_sessions ADD COLUMN incoming_bytes INTEGER NOT NULL DEFAULT 0'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE captive_sessions ADD COLUMN outgoing_bytes INTEGER NOT NULL DEFAULT 0'); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE access_logs ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE notifications ADD COLUMN gateway_id TEXT NOT NULL DEFAULT 'unassigned'"); } catch { /* The column already exists after an upgrade. */ }
 
@@ -105,6 +119,9 @@ if (clientPrimaryKey.length !== 2 || !clientPrimaryKey.some(column => column.nam
         access_type TEXT CHECK(access_type IN ('high_speed','limited')),
         auth_status TEXT NOT NULL DEFAULT 'pending' CHECK(auth_status IN ('pending','authorized')),
         first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, authorized_until TEXT,
+        session_started_at TEXT, last_counter_at TEXT,
+        incoming_bytes INTEGER NOT NULL DEFAULT 0, outgoing_bytes INTEGER NOT NULL DEFAULT 0,
+        incoming_bps REAL, outgoing_bps REAL,
         PRIMARY KEY(gateway_id,mac_address),
         FOREIGN KEY(user_id) REFERENCES users(id),
         FOREIGN KEY(gateway_id) REFERENCES gateways(id)
@@ -278,11 +295,48 @@ function markClientOffline(gatewayId, macAddress, reason = 'heartbeat-missing') 
   if (!mac) return false;
   const client = db.prepare('SELECT user_id,access_type,auth_status,authorized_until FROM clients WHERE gateway_id=? AND mac_address=?').get(scopedGatewayId, mac);
   if (!client || client.auth_status !== 'authorized') return false;
-  db.prepare("UPDATE clients SET auth_status='pending' WHERE gateway_id=? AND mac_address=?").run(scopedGatewayId, mac);
+  db.prepare("UPDATE clients SET auth_status='pending',incoming_bps=0,outgoing_bps=0 WHERE gateway_id=? AND mac_address=?").run(scopedGatewayId, mac);
   createClientNotification('client_offline', {
     gatewayId:scopedGatewayId, macAddress:mac, userId:client.user_id, accessType:client.access_type,
     eventKey:`offline:${scopedGatewayId}:${mac}:${client.authorized_until || new Date().toISOString()}`, reason
   });
+  return true;
+}
+
+function wifiDogCounter(searchParams, names) {
+  for (const name of names) {
+    const raw = searchParams.get(name);
+    if (raw === null || raw === '') continue;
+    const value = Number(raw);
+    if (Number.isFinite(value) && value >= 0) return Math.min(Math.round(value), Number.MAX_SAFE_INTEGER);
+  }
+  return null;
+}
+
+// WiFiDog sends cumulative traffic counters with the login/counters callback.
+// Store both totals and the rate between the two most recent callbacks so the
+// dashboard can monitor actual gateway traffic without routing it via the VPS.
+function recordWifiDogTelemetry(session, url, now = new Date()) {
+  if (!session?.token_hash || !session.mac_address) return false;
+  const incoming = wifiDogCounter(url.searchParams, ['incoming','Incoming','incoming_bytes','rx_bytes']);
+  const outgoing = wifiDogCounter(url.searchParams, ['outgoing','Outgoing','outgoing_bytes','tx_bytes']);
+  if (incoming === null && outgoing === null) return false;
+  const nowIso = now.toISOString();
+  const previousIncoming = Number(session.incoming_bytes || 0);
+  const previousOutgoing = Number(session.outgoing_bytes || 0);
+  const nextIncoming = incoming ?? previousIncoming;
+  const nextOutgoing = outgoing ?? previousOutgoing;
+  const elapsedSeconds = session.last_counter_at ? (now.getTime() - new Date(session.last_counter_at).getTime()) / 1000 : 0;
+  const incomingDelta = nextIncoming >= previousIncoming ? nextIncoming - previousIncoming : nextIncoming;
+  const outgoingDelta = nextOutgoing >= previousOutgoing ? nextOutgoing - previousOutgoing : nextOutgoing;
+  const incomingBps = elapsedSeconds > 0 ? Math.round((incomingDelta * 8) / elapsedSeconds) : null;
+  const outgoingBps = elapsedSeconds > 0 ? Math.round((outgoingDelta * 8) / elapsedSeconds) : null;
+  const gatewayId = gatewayKey(session.gateway_id);
+  db.prepare(`UPDATE captive_sessions SET last_counter_at=?,incoming_bytes=?,outgoing_bytes=? WHERE token_hash=?`)
+    .run(nowIso, nextIncoming, nextOutgoing, session.token_hash);
+  db.prepare(`UPDATE clients SET last_seen_at=?,last_counter_at=?,incoming_bytes=?,outgoing_bytes=?,incoming_bps=?,outgoing_bps=?
+    WHERE gateway_id=? AND mac_address=?`)
+    .run(nowIso, nowIso, nextIncoming, nextOutgoing, incomingBps, outgoingBps, gatewayId, session.mac_address);
   return true;
 }
 function sweepOfflineClients(now = new Date()) {
@@ -380,6 +434,7 @@ function confirmWifiDogSession(url) {
   trackClient({ ...context, gw_id:requestGatewayId });
 
   if (stage === 'logout') {
+    if (tokenSession) recordWifiDogTelemetry(tokenSession, url, now);
     if (rawToken) db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
     markClientOffline(requestGatewayId, mac, 'logout');
     return false;
@@ -399,8 +454,17 @@ function confirmWifiDogSession(url) {
     const authorizedAt = session.authorized_at || nowIso;
     const authorizedUntil = session.authorized_until || new Date(now.getTime() + sessionHours * 60 * 60 * 1000).toISOString();
     db.prepare('UPDATE captive_sessions SET authorized_at=?,authorized_until=? WHERE token_hash=?').run(authorizedAt, authorizedUntil, hashToken(rawToken));
-    db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=? WHERE gateway_id=? AND mac_address=?`)
-      .run(session.user_id, session.access_type, nowIso, authorizedUntil, sessionGatewayId, mac);
+    if (firstAuthorization) {
+      db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=?,
+        session_started_at=?,last_counter_at=NULL,incoming_bytes=0,outgoing_bytes=0,incoming_bps=NULL,outgoing_bps=NULL
+        WHERE gateway_id=? AND mac_address=?`)
+        .run(session.user_id, session.access_type, nowIso, authorizedUntil, authorizedAt, sessionGatewayId, mac);
+    } else {
+      db.prepare(`UPDATE clients SET user_id=?,access_type=?,auth_status='authorized',last_seen_at=?,authorized_until=?
+        WHERE gateway_id=? AND mac_address=?`)
+        .run(session.user_id, session.access_type, nowIso, authorizedUntil, sessionGatewayId, mac);
+    }
+    recordWifiDogTelemetry({ ...session, gateway_id:sessionGatewayId, authorized_at:authorizedAt, authorized_until:authorizedUntil }, url, now);
     if (firstAuthorization) createClientNotification('client_login', {
       gatewayId:sessionGatewayId, macAddress:mac, userId:session.user_id, accessType:session.access_type,
       eventKey:`login:${hashToken(rawToken)}`
@@ -411,6 +475,7 @@ function confirmWifiDogSession(url) {
   if (rawToken) {
     const session = tokenSession;
     const valid = !!(session && !session.revoked_at && session.authorized_at && session.authorized_until > nowIso && (!mac || session.mac_address === mac));
+    if (valid && stage === 'counters') recordWifiDogTelemetry(session, url, now);
     if (session?.authorized_at && !valid && session.mac_address === mac) markClientOffline(session.gateway_id, mac, 'session-expired');
     return valid;
   }
@@ -634,30 +699,117 @@ async function api(req, res, url) {
       .run(gatewayId, projectId, name, location, model, createdAt, current?.last_seen_at || null);
     return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
   }
+  if (route === '/api/admin/export.csv' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
+    const projectId = String(url.searchParams.get('projectId') || '').trim();
+    const scoped = !!(gatewayId || projectId);
+    const scopeCondition = gatewayId ? 'c.gateway_id=?' : projectId ? 'g.project_id=?' : '';
+    const scopeParams = gatewayId ? [gatewayId] : projectId ? [projectId] : [];
+    const rows = db.prepare(`WITH ranked_clients AS (
+      SELECT c.gateway_id,c.mac_address,c.client_ip,c.ssid,c.auth_status,c.last_seen_at,c.session_started_at,
+        c.incoming_bytes,c.outgoing_bytes,g.name AS gateway_name,g.project_id,p.name AS project_name,c.user_id,
+        ROW_NUMBER() OVER (PARTITION BY c.user_id ORDER BY c.last_seen_at DESC) AS row_number
+      FROM clients c JOIN gateways g ON g.id=c.gateway_id JOIN projects p ON p.id=g.project_id
+      WHERE c.user_id IS NOT NULL${scopeCondition ? ` AND ${scopeCondition}` : ''}
+    )
+    SELECT u.full_name,u.email,u.phone_number,u.address,u.is_verified,u.created_at,
+      r.project_name,r.gateway_name,r.gateway_id,r.mac_address,r.client_ip,r.ssid,r.auth_status,
+      r.last_seen_at,r.session_started_at,r.incoming_bytes,r.outgoing_bytes
+    FROM users u ${scoped ? 'JOIN' : 'LEFT JOIN'} ranked_clients r ON r.user_id=u.id AND r.row_number=1
+    ORDER BY u.created_at DESC`).all(...scopeParams);
+    const csvCell = value => {
+      let safe = String(value ?? '');
+      if (/^[=+\-@]/.test(safe)) safe = `'${safe}`;
+      return `"${safe.replaceAll('"','""')}"`;
+    };
+    const header = ['Nama Lengkap','Email','Nomor HP','Alamat','Status Verifikasi','Tanggal Daftar','Project','Gateway','Gateway ID','MAC','IP Klien','SSID','Status Akses','Terakhir Terlihat','Total Penggunaan (Bytes)','Durasi Sesi (Detik)'];
+    const now = Date.now();
+    const lines = rows.map(row => {
+      const sessionEnd = row.auth_status === 'authorized' ? now : new Date(row.last_seen_at || row.session_started_at || 0).getTime();
+      const sessionStart = new Date(row.session_started_at || 0).getTime();
+      const duration = sessionStart > 0 && sessionEnd >= sessionStart ? Math.floor((sessionEnd - sessionStart) / 1000) : 0;
+      return [row.full_name,row.email,row.phone_number,row.address,row.is_verified ? 'Terverifikasi' : 'Belum terverifikasi',row.created_at,
+        row.project_name,row.gateway_name,row.gateway_id,row.mac_address,row.client_ip,row.ssid,row.auth_status,row.last_seen_at,
+        Number(row.incoming_bytes || 0) + Number(row.outgoing_bytes || 0),duration].map(csvCell).join(',');
+    });
+    res.writeHead(200, {
+      'content-type':'text/csv; charset=utf-8',
+      'content-disposition':'attachment; filename="pengguna-terdaftar-perumnet.csv"',
+      'cache-control':'no-store'
+    });
+    return res.end(`\ufeff${[header.map(csvCell).join(','),...lines].join('\n')}`);
+  }
   if (route === '/api/admin/clients' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
     sweepOfflineClients();
     const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
     const projectId = String(url.searchParams.get('projectId') || '').trim();
-    const scopeSql = gatewayId ? ' WHERE c.gateway_id=?' : projectId ? ' WHERE g.project_id=?' : '';
-    const scopeParams = gatewayId ? [gatewayId] : projectId ? [projectId] : [];
-    const rows = db.prepare(`SELECT c.gateway_id,c.mac_address,c.client_ip,c.ssid,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,c.authorized_until,
+    const category = ['all','account','free','pending'].includes(url.searchParams.get('category')) ? url.searchParams.get('category') : 'all';
+    const search = String(url.searchParams.get('search') || '').trim().toLowerCase().slice(0,120);
+    const allowedLimits = [10,25,50,100];
+    const requestedLimit = Number(url.searchParams.get('limit') || 10);
+    const limit = allowedLimits.includes(requestedLimit) ? requestedLimit : 10;
+    const requestedPage = Math.max(1, Number.parseInt(url.searchParams.get('page') || '1',10) || 1);
+    const scopeConditions = [];
+    const scopeParams = [];
+    if (gatewayId) { scopeConditions.push('c.gateway_id=?'); scopeParams.push(gatewayId); }
+    else if (projectId) { scopeConditions.push('g.project_id=?'); scopeParams.push(projectId); }
+    const filteredConditions = [...scopeConditions];
+    const filteredParams = [...scopeParams];
+    if (category === 'account') filteredConditions.push('c.user_id IS NOT NULL');
+    else if (category === 'free') filteredConditions.push("c.user_id IS NULL AND c.access_type='limited'");
+    else if (category === 'pending') filteredConditions.push('c.user_id IS NULL AND c.access_type IS NULL');
+    if (search) {
+      filteredConditions.push(`LOWER(COALESCE(u.full_name,'') || ' ' || COALESCE(u.email,'') || ' ' || COALESCE(u.phone_number,'') || ' ' ||
+        COALESCE(u.address,'') || ' ' || c.mac_address || ' ' || COALESCE(c.client_ip,'') || ' ' || COALESCE(c.ssid,'') || ' ' ||
+        g.id || ' ' || g.name || ' ' || p.name) LIKE ?`);
+      filteredParams.push(`%${search}%`);
+    }
+    const filteredWhere = filteredConditions.length ? `WHERE ${filteredConditions.join(' AND ')}` : '';
+    const scopeWhere = scopeConditions.length ? `WHERE ${scopeConditions.join(' AND ')}` : '';
+    const totalFiltered = db.prepare(`SELECT COUNT(*) AS total FROM clients c LEFT JOIN users u ON u.id=c.user_id
+      JOIN gateways g ON g.id=c.gateway_id JOIN projects p ON p.id=g.project_id ${filteredWhere}`).get(...filteredParams)?.total || 0;
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / limit));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * limit;
+    const rows = db.prepare(`SELECT c.gateway_id,c.mac_address,c.client_ip,c.ssid,c.user_id,c.access_type,c.auth_status,c.first_seen_at,c.last_seen_at,c.authorized_until,
+      c.session_started_at,c.last_counter_at,c.incoming_bytes,c.outgoing_bytes,c.incoming_bps,c.outgoing_bps,
       g.name AS gateway_name,g.location AS gateway_location,g.model AS gateway_model,g.project_id,
       p.name AS project_name,p.location AS project_location,
       u.full_name,u.email,u.phone_number,u.address,u.is_verified
       FROM clients c LEFT JOIN users u ON u.id=c.user_id
       JOIN gateways g ON g.id=c.gateway_id JOIN projects p ON p.id=g.project_id
-      ${scopeSql} ORDER BY c.last_seen_at DESC LIMIT 500`).all(...scopeParams);
+      ${filteredWhere} ORDER BY c.last_seen_at DESC LIMIT ? OFFSET ?`).all(...filteredParams, limit, offset);
     const ssidSettings = db.prepare('SELECT default_ssid,account_ssid,free_ssid FROM portal_settings WHERE id=1').get() || {};
-    const clients = rows.map(row => ({
-      ...row,
-      ssid:ssidFromGateway({ ssid:row.ssid }) || (row.access_type === 'limited' ? ssidSettings.free_ssid : ssidSettings.account_ssid || ssidSettings.default_ssid) || null
-    }));
+    const now = Date.now();
+    const clients = rows.map(row => {
+      const sessionStart = new Date(row.session_started_at || 0).getTime();
+      const sessionEnd = row.auth_status === 'authorized' ? now : new Date(row.last_counter_at || row.last_seen_at || 0).getTime();
+      return {
+        ...row,
+        ssid:ssidFromGateway({ ssid:row.ssid }) || (row.access_type === 'limited' ? ssidSettings.free_ssid : ssidSettings.account_ssid || ssidSettings.default_ssid) || null,
+        category:row.user_id ? 'account' : row.access_type === 'limited' ? 'free' : 'pending',
+        total_usage_bytes:Number(row.incoming_bytes || 0) + Number(row.outgoing_bytes || 0),
+        duration_seconds:sessionStart > 0 && sessionEnd >= sessionStart ? Math.floor((sessionEnd - sessionStart) / 1000) : 0,
+        telemetry_status:row.last_counter_at ? (row.auth_status === 'authorized' ? 'live' : 'ended') : 'waiting'
+      };
+    });
     const today = new Date().toISOString().slice(0,10);
     const stats = db.prepare(`SELECT COUNT(*) AS total, SUM(CASE WHEN substr(c.last_seen_at,1,10)=? THEN 1 ELSE 0 END) AS today,
       SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized
-      FROM clients c JOIN gateways g ON g.id=c.gateway_id ${scopeSql}`).get(today, ...scopeParams);
-    return json(res, 200, { clients, stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 } });
+      FROM clients c JOIN gateways g ON g.id=c.gateway_id ${scopeWhere}`).get(today, ...scopeParams);
+    const categoryCounts = db.prepare(`SELECT COUNT(*) AS all_count,
+      SUM(CASE WHEN c.user_id IS NOT NULL THEN 1 ELSE 0 END) AS account_count,
+      SUM(CASE WHEN c.user_id IS NULL AND c.access_type='limited' THEN 1 ELSE 0 END) AS free_count,
+      SUM(CASE WHEN c.user_id IS NULL AND c.access_type IS NULL THEN 1 ELSE 0 END) AS pending_count
+      FROM clients c JOIN gateways g ON g.id=c.gateway_id ${scopeWhere}`).get(...scopeParams);
+    return json(res, 200, {
+      clients,
+      stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 },
+      categories:{ all:categoryCounts.all_count || 0, account:categoryCounts.account_count || 0, free:categoryCounts.free_count || 0, pending:categoryCounts.pending_count || 0 },
+      pagination:{ page, limit, total:totalFiltered, totalPages }
+    });
   }
   if (route === '/api/admin/notifications' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
