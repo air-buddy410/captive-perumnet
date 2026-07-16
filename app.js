@@ -1,12 +1,14 @@
 const $ = (selector) => document.querySelector(selector);
-const screens = { portal: $('#portal-screen'), free:$('#free-screen'), success: $('#success-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
+const screens = { portal: $('#portal-screen'), free:$('#free-screen'), success: $('#success-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), gatewayReview:$('#gateway-review-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
 // Preserve every query parameter forwarded by the gateway. WiFiDog uses
 // gw_address, gw_port, gw_id, mac, url, and token.
 const captiveContext = Object.fromEntries(new URLSearchParams(location.search).entries());
 const isAdminView = location.pathname === '/admin' || location.pathname === '/admin/';
 const isFreeView = location.pathname === '/free' || location.pathname === '/free/' || location.pathname.startsWith('/free/auth/wifidogAuth/login');
+const isGatewayReviewView = location.pathname === '/gateway-review' || location.pathname === '/gateway-review/';
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
 if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title='PerumNet — Internet Gratis'; }
+if (isGatewayReviewView) { document.body.classList.add('account-action-view'); $('#portal-screen').style.display='none'; document.title='PerumNet — Verifikasi Gateway'; }
 const pageParams = new URLSearchParams(location.search);
 let verificationToken = pageParams.get('verify');
 let passwordResetToken = pageParams.get('reset');
@@ -51,7 +53,7 @@ async function loadPortalSettings() {
   } catch { setWifiName(gatewaySsid || (isFreeView ? '@PERUMNET_FreeWiFi' : '@PERUMNET_WiFi')); }
 }
 const leads = [];
-let networkCatalog = { projects:[], gateways:[], portalNetworks:[] };
+let networkCatalog = { projects:[], gateways:[], portalNetworks:[], blockedGateways:[] };
 const adminScope = { projectId:'', gatewayId:'' };
 const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
 const adminMonitoring = { range:'24h', loading:false };
@@ -84,7 +86,15 @@ function clearAccountActionUrl() { history.replaceState({},'',location.pathname)
 function startDestinationRedirect() { clearInterval(redirectTimer); let seconds=3; $('#redirect-countdown').textContent=seconds; redirectTimer=setInterval(()=>{ seconds-=1; $('#redirect-countdown').textContent=Math.max(seconds,0); if (seconds <= 0) { clearInterval(redirectTimer); location.assign(destinationUrl); } },1000); }
 function connectToWifi(withLead) { $('#success-message').textContent = withLead ? 'Akun Anda sudah aktif dan akses internet berhasil tersambung.' : 'Akses internet Anda sudah aktif. Selamat menggunakan WiFi gratis PerumNet.'; show('success'); startDestinationRedirect(); }
 const isConnectedCallback = new URLSearchParams(location.search).get('connected') === '1';
-if (isConnectedCallback) connectToWifi(!isFreeView);
+if (isGatewayReviewView) {
+  const gatewayStatus=pageParams.get('status');
+  if(gatewayStatus==='blocked'){
+    $('#gateway-review-title').textContent='Gateway diblokir.';
+    $('#gateway-review-message').textContent='Gateway ini telah dihapus dan diblokir oleh administrator sehingga tidak dapat menggunakan layanan captive portal.';
+  }
+  show('gatewayReview');
+}
+else if (isConnectedCallback) connectToWifi(!isFreeView);
 else if (isFreeView) show('free');
 const escapeHtml = value => String(value ?? '—').replace(/[&<>'"]/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
 const formatTime = value => value ? new Date(value).toLocaleString('id-ID', { dateStyle:'medium', timeStyle:'short' }) : '—';
@@ -273,7 +283,8 @@ function renderLeads() {
   $('#page-next').disabled=adminTable.page>=adminTable.totalPages;
 }
 function projectOptions(selected='') { return networkCatalog.projects.map(project=>`<option value="${escapeHtml(project.id)}" ${project.id===selected?'selected':''}>${escapeHtml(project.name)}</option>`).join(''); }
-function visibleGateways() { return networkCatalog.gateways.filter(gateway=>gateway.id!=='unassigned' || Number(gateway.client_count)>0); }
+function managedGateways() { return networkCatalog.gateways.filter(gateway=>gateway.id!=='unassigned'); }
+function visibleGateways() { return managedGateways().filter(gateway=>gateway.approval_status==='approved'); }
 function workspaceInitials(value='') { return String(value).trim().split(/\s+/).slice(0,2).map(word=>word[0]).join('').toUpperCase() || 'PN'; }
 function renderWorkspaceMenu() {
   const allActive=!adminScope.projectId && !adminScope.gatewayId;
@@ -288,8 +299,16 @@ function renderWorkspaceMenu() {
   $('#workspace-options').innerHTML=allOption+projects;
 }
 function renderGatewayCards() {
-  const gateways=visibleGateways();
-  $('#gateway-list').innerHTML=gateways.length ? gateways.map(gateway=>`<article class="gateway-card ${gateway.status}"><header><div><span class="gateway-status"><i></i>${gateway.status==='online'?'Online':'Offline'}</span><h3>${escapeHtml(gateway.name)}</h3><code>${escapeHtml(gateway.id)}</code></div><span class="gateway-client-count"><b>${gateway.client_count || 0}</b><small>perangkat</small></span></header><form class="gateway-form" data-gateway-id="${escapeHtml(gateway.id)}"><label>Project<select name="projectId">${projectOptions(gateway.project_id)}</select></label><label>Nama gateway<input name="name" value="${escapeHtml(gateway.name)}" placeholder="Nama gateway" required /></label><div class="gateway-form-grid"><label>Lokasi<input name="location" value="${escapeHtml(gateway.location || '')}" placeholder="Lokasi pemasangan" /></label><label>Model<input name="model" value="${escapeHtml(gateway.model || '')}" placeholder="Contoh: RG-EG105G-P-V3" /></label></div><div class="gateway-card-footer"><span>Terakhir aktif: <b>${escapeHtml(relativeTime(gateway.last_seen_at))}</b></span><button type="submit">Simpan identitas</button></div><p class="gateway-feedback inline-feedback" role="status"></p></form></article>`).join('') : '<div class="gateway-empty">Gateway akan muncul otomatis setelah menerima koneksi Ruijie.</div>';
+  const gateways=managedGateways();
+  $('#gateway-list').innerHTML=gateways.length ? gateways.map(gateway=>{
+    const pending=gateway.approval_status!=='approved';
+    return `<article class="gateway-card ${gateway.status} ${pending?'pending':''}"><header><div><span class="gateway-approval ${pending?'pending':'approved'}">${pending?'Menunggu verifikasi':'Terverifikasi'}</span><span class="gateway-status"><i></i>${gateway.status==='online'?'Online':'Offline'}</span><h3>${escapeHtml(gateway.name)}</h3><code>${escapeHtml(gateway.id)}</code></div><span class="gateway-client-count"><b>${gateway.client_count || 0}</b><small>perangkat</small></span></header><form class="gateway-form" data-gateway-id="${escapeHtml(gateway.id)}"><label>Project<select name="projectId">${projectOptions(gateway.project_id)}</select></label><label>Nama gateway<input name="name" value="${escapeHtml(gateway.name)}" placeholder="Nama gateway" required /></label><div class="gateway-form-grid"><label>Lokasi<input name="location" value="${escapeHtml(gateway.location || '')}" placeholder="Lokasi pemasangan" /></label><label>Model<input name="model" value="${escapeHtml(gateway.model || '')}" placeholder="Contoh: RG-EG105G-P-V3" /></label></div><div class="gateway-last-seen">Terakhir aktif: <b>${escapeHtml(relativeTime(gateway.last_seen_at))}</b></div><div class="gateway-actions"><button class="save-gateway" type="submit">Simpan identitas</button>${pending?'<button class="approve-gateway" type="button">Setujui Gateway</button>':''}<button class="delete-gateway" type="button">Hapus &amp; blokir</button></div><p class="gateway-feedback inline-feedback" role="status"></p></form></article>`;
+  }).join('') : '<div class="gateway-empty">Gateway akan muncul sebagai pending setelah menerima koneksi Ruijie.</div>';
+}
+function renderBlockedGateways() {
+  const blocked=networkCatalog.blockedGateways || [];
+  $('#blocked-gateway-section').hidden=!blocked.length;
+  $('#blocked-gateway-list').innerHTML=blocked.map(gateway=>`<article class="blocked-gateway-item"><div><b>${escapeHtml(gateway.gateway_id)}</b><span>Diblokir ${escapeHtml(relativeTime(gateway.blocked_at))}</span></div><button type="button" class="unblock-gateway" data-gateway-id="${escapeHtml(gateway.gateway_id)}">Buka blokir</button></article>`).join('');
 }
 function renderPortalNetworkRoutes() {
   const routes=networkCatalog.portalNetworks || [];
@@ -299,7 +318,8 @@ function renderPortalNetworkRoutes() {
     const isFree=route.portal_mode==='free';
     const portalLabel=isFree?'Portal Free':'Portal Akun';
     const ssid=isFree?freeSsid:accountSsid;
-    return `<article class="portal-network-card ${isFree?'free':'account'}"><header><span class="portal-route-icon">${isFree?'FR':'AC'}</span><div><small>${escapeHtml(route.project_name)} · ${escapeHtml(route.gateway_name)}</small><h4>${escapeHtml(route.network_alias)}</h4></div><span class="portal-route-badge">${portalLabel}</span></header><div class="portal-route-meta"><span><small>Subnet terdeteksi</small><b>${escapeHtml(route.client_cidr || 'Belum tersedia')}</b></span><span><small>SSID ditampilkan</small><b>${escapeHtml(ssid)}</b></span><span><small>Terakhir terlihat</small><b>${escapeHtml(relativeTime(route.last_seen_at))}</b></span></div><form class="portal-route-form" data-gateway-id="${escapeHtml(route.gateway_id)}" data-network-alias="${escapeHtml(route.network_alias)}"><label>Jenis portal<select name="portalMode"><option value="account" ${isFree?'':'selected'}>Portal Akun · Login/Daftar</option><option value="free" ${isFree?'selected':''}>Portal Free · One Click</option></select></label><button type="submit">Simpan routing</button><p class="inline-feedback portal-route-feedback" role="status"></p></form></article>`;
+    const pending=route.approval_status!=='approved';
+    return `<article class="portal-network-card ${isFree?'free':'account'} ${pending?'pending':''}"><header><span class="portal-route-icon">${isFree?'FR':'AC'}</span><div><small>${escapeHtml(route.project_name)} · ${escapeHtml(route.gateway_name)}${pending?' · Gateway pending':''}</small><h4>${escapeHtml(route.network_alias)}</h4></div><span class="portal-route-badge">${portalLabel}</span></header><div class="portal-route-meta"><span><small>Subnet terdeteksi</small><b>${escapeHtml(route.client_cidr || 'Belum tersedia')}</b></span><span><small>SSID ditampilkan</small><b>${escapeHtml(ssid)}</b></span><span><small>Terakhir terlihat</small><b>${escapeHtml(relativeTime(route.last_seen_at))}</b></span></div><form class="portal-route-form" data-gateway-id="${escapeHtml(route.gateway_id)}" data-network-alias="${escapeHtml(route.network_alias)}"><label>Jenis portal<select name="portalMode"><option value="account" ${isFree?'':'selected'}>Portal Akun · Login/Daftar</option><option value="free" ${isFree?'selected':''}>Portal Free · One Click</option></select></label><button type="submit">Simpan routing</button><p class="inline-feedback portal-route-feedback" role="status"></p></form></article>`;
   }).join('') : '<div class="gateway-empty">Jaringan akan muncul setelah menerima redirect WiFiDog dari Ruijie.</div>';
 }
 function renderScopeOptions() {
@@ -315,10 +335,11 @@ function renderScopeOptions() {
 }
 async function loadAdminNetwork() {
   networkCatalog=await api('/api/admin/network');
-  renderScopeOptions(); renderGatewayCards(); renderPortalNetworkRoutes();
+  renderScopeOptions(); renderGatewayCards(); renderBlockedGateways(); renderPortalNetworkRoutes();
   $('#network-project-total').textContent=networkCatalog.projects.length;
-  $('#network-gateway-total').textContent=visibleGateways().length;
-  $('#network-online-total').textContent=networkCatalog.gateways.filter(gateway=>gateway.status==='online').length;
+  $('#network-gateway-total').textContent=managedGateways().length;
+  $('#network-online-total').textContent=visibleGateways().filter(gateway=>gateway.status==='online').length;
+  $('#network-pending-total').textContent=managedGateways().filter(gateway=>gateway.approval_status!=='approved').length;
   $('#gateway-sync-time').textContent=`Disinkronkan ${new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}`;
 }
 renderLeads();
@@ -367,6 +388,43 @@ $('#scope-project').addEventListener('change',event=>applyAdminScope(event.targe
 $('#scope-gateway').addEventListener('change',event=>applyAdminScope(adminScope.projectId,event.target.value).catch(error=>alert(error.message)));
 $('#project-form').addEventListener('submit',async event=>{ event.preventDefault(); const form=event.currentTarget,button=form.querySelector('button'),feedback=$('#project-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent=''; try { await api('/api/admin/projects',{ name:data.get('name'),location:data.get('location') }); form.reset(); feedback.textContent='Project berhasil ditambahkan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
 $('#gateway-list').addEventListener('submit',async event=>{ const form=event.target.closest('.gateway-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.gateway-feedback'),data=new FormData(form); button.disabled=true; feedback.textContent='Menyimpan…'; try { await api('/api/admin/gateways',{ gatewayId:form.dataset.gatewayId,projectId:data.get('projectId'),name:data.get('name'),location:data.get('location'),model:data.get('model') }); feedback.textContent='Identitas gateway tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); await loadAdminLeads(); } catch(error){ feedback.textContent=error.message; feedback.classList.remove('success'); } finally { button.disabled=false; } });
+$('#gateway-list').addEventListener('click',async event=>{
+  const approveButton=event.target.closest('.approve-gateway'),deleteButton=event.target.closest('.delete-gateway');
+  if(!approveButton && !deleteButton) return;
+  const form=event.target.closest('.gateway-form'),gatewayId=form?.dataset.gatewayId;
+  if(!form || !gatewayId) return;
+  if(approveButton){
+    if(!confirm(`Setujui gateway ${gatewayId}?\n\nSetelah disetujui, gateway dapat membuat token login sesuai routing VLAN yang Anda atur.`)) return;
+    const data=new FormData(form);
+    approveButton.disabled=true;
+    try{
+      await api('/api/admin/gateways',{ gatewayId,projectId:data.get('projectId'),name:data.get('name'),location:data.get('location'),model:data.get('model') });
+      await api('/api/admin/gateways/approval',{ gatewayId });
+      await loadAdminNetwork();
+      alert('Gateway berhasil diverifikasi dan sekarang dapat menggunakan captive portal.');
+    }catch(error){ alert(error.message); approveButton.disabled=false; }
+    return;
+  }
+  const gateway=managedGateways().find(item=>item.id===gatewayId);
+  const message=`Hapus dan blokir ${gateway?.name || gatewayId}?\n\nSeluruh client, sesi, histori monitoring, notifikasi, dan routing VLAN pada gateway ini akan dihapus. ID yang sama tidak dapat muncul kembali sebelum blokir dibuka.`;
+  if(!confirm(message)) return;
+  deleteButton.disabled=true;
+  try{
+    await api('/api/admin/gateways',{ gatewayId },'DELETE');
+    if(adminScope.gatewayId===gatewayId){ adminScope.gatewayId=''; adminScope.projectId=''; }
+    await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]);
+    alert('Gateway berhasil dihapus dan ID-nya telah diblokir.');
+  }catch(error){ alert(error.message); deleteButton.disabled=false; }
+});
+$('#blocked-gateway-list').addEventListener('click',async event=>{
+  const button=event.target.closest('.unblock-gateway');
+  if(!button) return;
+  const gatewayId=button.dataset.gatewayId;
+  if(!confirm(`Buka blokir ${gatewayId}?\n\nGateway belum langsung dipercaya. Request berikutnya akan muncul kembali sebagai pending dan tetap harus disetujui admin.`)) return;
+  button.disabled=true;
+  try{ await api('/api/admin/gateway-blocks',{ gatewayId },'DELETE'); await loadAdminNetwork(); }
+  catch(error){ alert(error.message); button.disabled=false; }
+});
 $('#portal-network-list').addEventListener('submit',async event=>{ const form=event.target.closest('.portal-route-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.portal-route-feedback'),portalMode=new FormData(form).get('portalMode'); button.disabled=true; feedback.textContent='Menyimpan routing…'; feedback.classList.remove('success'); try { await api('/api/admin/portal-networks',{ gatewayId:form.dataset.gatewayId,networkAlias:form.dataset.networkAlias,portalMode }); feedback.textContent='Routing portal tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; } finally { button.disabled=false; } });
 $('#search-input').addEventListener('input', event => { clearTimeout(searchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; searchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
 $('#category-filter').addEventListener('click',event=>{ const button=event.target.closest('[data-category]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#category-filter [data-category]').forEach(item=>item.classList.toggle('active',item===button)); adminTable.category=button.dataset.category; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });

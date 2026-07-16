@@ -36,7 +36,7 @@ try {
   const mac = '02:00:00:00:10:01';
   const context = { gw_address:'10.1.10.1', gw_port:'2060', gw_id:'test-gateway', mac, ip:'10.1.10.10', ssid:'VLAN10' };
   const defaultLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10`, { redirect:'manual' });
-  assert(defaultLogin.status === 200, 'Jaringan baru harus aman dengan fallback Portal Akun.');
+  assert(defaultLogin.status === 302 && new URL(defaultLogin.headers.get('location')).pathname === '/gateway-review', 'Gateway baru harus dikarantina sampai diverifikasi admin.');
   const adminLogin = await fetch(`${baseUrl}/api/admin/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },
     body:JSON.stringify({ email:'admin-test@example.com', password:'admin-test-password' })
@@ -46,6 +46,18 @@ try {
   const discoveredNetworkResponse = await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } });
   const discoveredNetwork = await discoveredNetworkResponse.json();
   assert(discoveredNetwork.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_alias==='VLAN10' && route.portal_mode==='account'), 'Redirect WiFiDog harus menemukan alias VLAN dengan fallback Portal Akun.');
+  assert(discoveredNetwork.gateways.some(gateway=>gateway.id==='test-gateway' && gateway.approval_status==='pending'), 'Gateway baru harus tampil sebagai menunggu verifikasi.');
+  const quarantinedLimited = await fetch(`${baseUrl}/api/captive/limited`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context })
+  });
+  assert(quarantinedLimited.status === 403, 'Gateway pending tidak boleh membuat token one-click.');
+  const approveGateway = await fetch(`${baseUrl}/api/admin/gateways/approval`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'test-gateway' })
+  });
+  assert(approveGateway.status === 200, 'Admin harus dapat menyetujui gateway pending.');
+  const approvedDefaultLogin = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=test-gateway&gw_address=10.1.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.1.10.10&ssid=VLAN10`, { redirect:'manual' });
+  assert(approvedDefaultLogin.status === 200, 'Gateway terverifikasi harus membuka Portal Akun sebagai fallback aman.');
   const mapFreeNetwork = await fetch(`${baseUrl}/api/admin/portal-networks`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
     body:JSON.stringify({ gatewayId:'test-gateway',networkAlias:'VLAN10',portalMode:'free' })
@@ -167,12 +179,22 @@ try {
   const updatedPortalSettings = await (await fetch(`${baseUrl}/api/settings`)).json();
   assert(updatedPortalSettings.account_ssid === '@PERUMNET_WiFi' && updatedPortalSettings.free_ssid === '@PERUMNET_FreeWiFi', 'API settings harus mengembalikan dua SSID portal yang tepat.');
   const secondGatewayContext = { ...context, gw_id:'branch-gateway', ip:'10.2.10.10' };
-  await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
+  const secondGatewayPending = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
+  assert(secondGatewayPending.status === 302 && new URL(secondGatewayPending.headers.get('location')).pathname === '/gateway-review', 'Gateway kedua juga harus menunggu persetujuan independen.');
   const mapSecondGatewayFree = await fetch(`${baseUrl}/api/admin/portal-networks`, {
     method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
     body:JSON.stringify({ gatewayId:'branch-gateway',networkAlias:'VLAN10',portalMode:'free' })
   });
   assert(mapSecondGatewayFree.status === 200, 'Routing portal harus dapat diatur berbeda pada gateway kedua.');
+  const secondGatewayBeforeApproval = await fetch(`${baseUrl}/api/captive/limited`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:secondGatewayContext })
+  });
+  assert(secondGatewayBeforeApproval.status === 403, 'Routing Free tidak boleh melewati verifikasi gateway.');
+  const approveSecondGateway = await fetch(`${baseUrl}/api/admin/gateways/approval`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'branch-gateway' })
+  });
+  assert(approveSecondGateway.status === 200, 'Gateway kedua harus dapat disetujui secara terpisah.');
   const secondGatewayResponse = await fetch(`${baseUrl}/api/captive/limited`, {
     method:'POST', headers:{ 'content-type':'application/json' }, body:JSON.stringify({ context:secondGatewayContext })
   });
@@ -247,6 +269,24 @@ try {
     body:JSON.stringify({ email:'wifidog-test@example.com', password:newPassword, context:accountContext })
   });
   assert(removedLogin.status === 401, 'Akun yang dihapus tidak boleh dapat login kembali.');
+  const deleteGatewayResponse = await fetch(`${baseUrl}/api/admin/gateways`, {
+    method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'branch-gateway' })
+  });
+  const deletedGateway = await deleteGatewayResponse.json();
+  assert(deleteGatewayResponse.status === 200 && deletedGateway.blocked, 'Hapus gateway harus membersihkan data dan memblokir ID gateway.');
+  const blockedNetwork = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } })).json();
+  assert(!blockedNetwork.gateways.some(gateway=>gateway.id==='branch-gateway') && blockedNetwork.blockedGateways.some(gateway=>gateway.gateway_id==='branch-gateway'), 'Gateway terhapus harus hilang dari daftar aktif dan masuk daftar blokir.');
+  const blockedGatewayRetry = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
+  assert(blockedGatewayRetry.status === 302 && new URL(blockedGatewayRetry.headers.get('location')).searchParams.get('status') === 'blocked', 'Request berulang dari gateway terhapus tidak boleh mendaftarkannya kembali.');
+  const unblockGateway = await fetch(`${baseUrl}/api/admin/gateway-blocks`, {
+    method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'branch-gateway' })
+  });
+  assert(unblockGateway.status === 200, 'Admin harus dapat membuka blokir jika gateway ternyata valid.');
+  await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
+  const rediscoveredGateway = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } })).json();
+  assert(rediscoveredGateway.gateways.some(gateway=>gateway.id==='branch-gateway' && gateway.approval_status==='pending'), 'Gateway yang dibuka blokirnya harus kembali sebagai pending, bukan langsung dipercaya.');
   console.log('WiFiDog token handshake: PASS');
 } finally {
   child.kill('SIGTERM');
