@@ -184,6 +184,48 @@ try {
   assert(portalSettingsUpdate.status === 200, 'Admin harus dapat menyimpan SSID portal akun dan portal free.');
   const updatedPortalSettings = await (await fetch(`${baseUrl}/api/settings`)).json();
   assert(updatedPortalSettings.account_ssid === '@PERUMNET_WiFi' && updatedPortalSettings.free_ssid === '@PERUMNET_FreeWiFi', 'API settings harus mengembalikan dua SSID portal yang tepat.');
+  assert(updatedPortalSettings.profiles.account.headline === 'Masuk ke internet cepat.' && updatedPortalSettings.profiles.free.headline === 'Terhubung dalam satu klik.', 'Migrasi konten harus menyediakan profil account dan free yang terpisah.');
+  const unauthorizedContentUpdate = await fetch(`${baseUrl}/api/admin/portal-content`, {
+    method:'POST', headers:{ 'content-type':'application/json' }, body:'{}'
+  });
+  assert(unauthorizedContentUpdate.status === 401, 'Editor konten portal harus dilindungi session admin.');
+  const uploadResponse = await fetch(`${baseUrl}/api/admin/uploads`, {
+    method:'POST', headers:{ 'content-type':'application/json',cookie:adminCookie },
+    body:JSON.stringify({
+      filename:'promo.png',mimeType:'image/png',
+      data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    })
+  });
+  const uploadedImage = await uploadResponse.json();
+  assert(uploadResponse.status === 201 && /^\/uploads\/.+\.png$/.test(uploadedImage.url), 'Admin harus dapat mengunggah gambar promo aman.');
+  const uploadedImageResponse = await fetch(`${baseUrl}${uploadedImage.url}`);
+  assert(uploadedImageResponse.status === 200 && uploadedImageResponse.headers.get('content-type') === 'image/png', 'Gambar promo harus dapat diakses client dengan MIME yang benar.');
+  const portalContentUpdate = await fetch(`${baseUrl}/api/admin/portal-content`, {
+    method:'POST', headers:{ 'content-type':'application/json',cookie:adminCookie },
+    body:JSON.stringify({
+      profiles:{
+        account:{ ssid:'@PERUMNET_WiFi',eyebrow:'Akses member',headline:'Internet cepat untuk pelanggan.',description:'Login dengan akun PerumNet terverifikasi.',primary_button_label:'Masuk sekarang',announcement_enabled:true,announcement_tone:'info',announcement_title:'Informasi Portal Akun',announcement_text:'Pengumuman ini hanya tampil di jaringan akun.',announcement_link_label:'Baca info',announcement_link_url:'https://perumnet.id' },
+        free:{ ssid:'@PERUMNET_FreeWiFi',eyebrow:'Akses gratis',headline:'Gratis dalam satu klik.',description:'Tanpa akun dan tanpa formulir.',primary_button_label:'Hubungkan Gratis',announcement_enabled:true,announcement_tone:'promo',announcement_title:'Promo Portal Free',announcement_text:'Promo ini hanya tampil di jaringan free.',announcement_link_label:'Lihat promo',announcement_link_url:'https://perumnet.id/promo' }
+      },
+      promotions:[
+        { id:'promo-account-001',profile:'account',title:'Promo Member',description:'Khusus pengguna terdaftar.',image_url:uploadedImage.url,link_label:'Lihat',link_url:'https://perumnet.id',is_active:true },
+        { id:'promo-free-0001',profile:'free',title:'Promo Gratis',description:'Khusus pengunjung Free WiFi.',image_url:uploadedImage.url,is_active:true },
+        { id:'promo-free-draft',profile:'free',title:'Draft Promo',description:'Tidak boleh tampil pada portal client.',is_active:false }
+      ],
+      termsText:'Ketentuan portal dinamis.',limitedBandwidthKbps:768
+    })
+  });
+  assert(portalContentUpdate.status === 200, 'Admin harus dapat menerbitkan konten dinamis untuk kedua portal.');
+  const dynamicPortalSettings = await (await fetch(`${baseUrl}/api/settings`)).json();
+  assert(dynamicPortalSettings.profiles.account.headline === 'Internet cepat untuk pelanggan.' && dynamicPortalSettings.profiles.free.headline === 'Gratis dalam satu klik.', 'Judul account dan free harus tersimpan independen.');
+  assert(dynamicPortalSettings.profiles.account.promotions[0].title === 'Promo Member' && dynamicPortalSettings.profiles.free.promotions[0].title === 'Promo Gratis', 'Promo harus dikelompokkan sesuai profil SSID.');
+  assert(dynamicPortalSettings.promotions.some(item=>item.title==='Draft Promo' && item.is_active===false) && !dynamicPortalSettings.profiles.free.promotions.some(item=>item.title==='Draft Promo'), 'Promo nonaktif harus tetap dapat diedit admin tanpa tampil pada Portal Free.');
+  assert(dynamicPortalSettings.profiles.account.announcement_title !== dynamicPortalSettings.profiles.free.announcement_title, 'Pengumuman kedua portal tidak boleh saling menimpa.');
+  const duplicateSsidUpdate = await fetch(`${baseUrl}/api/admin/portal-content`, {
+    method:'POST', headers:{ 'content-type':'application/json',cookie:adminCookie },
+    body:JSON.stringify({ profiles:{ account:{...dynamicPortalSettings.profiles.account,ssid:'SSID-SAMA'},free:{...dynamicPortalSettings.profiles.free,ssid:'SSID-SAMA'} },promotions:[] })
+  });
+  assert(duplicateSsidUpdate.status === 400, 'Editor harus menolak SSID account dan free yang sama.');
   const secondGatewayContext = { ...context, gw_id:'branch-gateway', ip:'10.2.10.10' };
   const secondGatewayPending = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
   assert(secondGatewayPending.status === 302 && new URL(secondGatewayPending.headers.get('location')).pathname === '/gateway-review', 'Gateway kedua juga harus menunggu persetujuan independen.');

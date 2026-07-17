@@ -78,6 +78,14 @@ assert.match(app, /setInterval\(\(\)=>\{[\s\S]*loadAdminLeads\(\{ silent:true \}
 assert.match(app, /async function refreshAdminData\(\)[\s\S]*loadAdminNetwork\(\)[\s\S]*Promise\.allSettled\(\[loadAdminLeads\(\),loadAdminMonitoring\(\),loadAdminUsers\(\),loadNotifications\(\)\]\)/, 'Refresh global harus menyinkronkan jaringan, tabel, database pengguna, grafik, dan notifikasi.');
 assert.match(app, /async function refreshTableData\(\)[\s\S]*tableRefreshPromise=loadAdminLeads\(\)/, 'Refresh tabel harus memperbarui data klien tanpa memuat ulang halaman.');
 assert.match(app, /function mountAdminUsersPage\(\)/, 'UI harus membangun halaman CRUD pengguna dalam session admin yang sama.');
+assert.match(app, /function mountPortalContentStudio\(\)/, 'Pengaturan Portal harus memiliki editor konten dinamis.');
+assert.match(app, /id="portal-profile-tabs"/, 'Editor harus memisahkan Portal Akun dan Portal Free dalam tab yang jelas.');
+assert.match(app, /id="portal-promo-list"/, 'Editor harus menyediakan pengelolaan beberapa kartu promo.');
+assert.match(app, /\/api\/admin\/uploads/, 'Editor harus dapat mengunggah gambar promo ke server.');
+assert.match(app, /\/api\/admin\/portal-content/, 'Editor harus menerbitkan kedua profil melalui API konten portal.');
+assert.match(app, /function renderPublicPortalContent\(\)/, 'Portal client harus merender konten dinamis dari database.');
+assert.match(html, /id="account-portal-extras"/, 'Portal Akun harus memiliki area pengumuman dan promo sendiri.');
+assert.match(html, /id="free-portal-extras"/, 'Portal Free harus memiliki area pengumuman dan promo sendiri.');
 assert.match(app, /id="admin-user-form"/, 'Halaman pengguna harus menyediakan form tambah dan edit data.');
 assert.match(app, /api\('\/api\/admin\/users',payload,creating \? 'POST':'PATCH'\)/, 'Form pengguna harus membedakan pembuatan dan pembaruan data.');
 assert.match(app, /api\('\/api\/admin\/users',\{ userId:user\.id \},'DELETE'\)/, 'Halaman pengguna harus dapat menghapus akun berdasarkan ID.');
@@ -113,6 +121,10 @@ assert.match(css, /\.portal-network-description/, 'Deskripsi VLAN harus terlihat
 assert.match(css, /\.gateway-card\.pending/, 'Gateway pending harus memiliki status visual yang jelas.');
 assert.match(css, /\.blocked-gateway-item/, 'Daftar blokir gateway harus responsif dan terstruktur.');
 assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');
+assert.match(css, /\.portal-content-studio/, 'Editor konten portal harus memiliki layout admin yang terstruktur.');
+assert.match(css, /\.portal-announcement/, 'Pengumuman dinamis harus memiliki tampilan client yang jelas.');
+assert.match(css, /\.portal-promotion-strip/, 'Promo client harus responsif dan dapat digulir tanpa overflow halaman.');
+assert.match(css, /@media\(max-width:760px\)\{\.content-studio-header/, 'Editor portal harus memiliki layout mobile khusus.');
 const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1880px}');
 const mobileGatewayTableReset = css.lastIndexOf('body.admin-view table{display:block;width:100%;min-width:0;max-width:100%');
 const finalMobileTableReset = css.lastIndexOf('body.admin-view table{min-width:0}');
