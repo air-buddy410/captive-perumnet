@@ -9,6 +9,8 @@ const [html, css, app, favicon] = await Promise.all([
 ]);
 
 assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Status koneksi harus memakai modal.');
+assert.doesNotMatch(html, /Masuk sebagai admin|id="admin-trigger"|id="access-admin-trigger"/, 'Portal pelanggan tidak boleh menampilkan akses menuju halaman admin.');
+assert.doesNotMatch(app, /#admin-trigger|#access-admin-trigger/, 'JavaScript portal tidak boleh menyimpan event handler tautan admin yang sudah dihapus.');
 assert.match(html, /id="free-screen" class="free-page"/, 'Portal harus menyediakan halaman khusus one-click di /free.');
 assert.match(html, /id="free-connect"[^>]*type="button"/, 'Halaman free harus menyediakan satu tombol koneksi tanpa formulir.');
 assert.doesNotMatch(html, /id="choose-limited"/, 'Portal akun utama tidak boleh lagi menampilkan pilihan one-click.');
