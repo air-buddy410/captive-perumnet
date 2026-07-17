@@ -449,3 +449,39 @@ body.admin-view .table-tools{align-items:center;justify-content:space-between;fl
 @media(max-width:760px){.content-studio-header{align-items:stretch;flex-direction:column;padding:19px 15px}.content-studio-header h3{font-size:18px}.studio-save-state{align-items:stretch;flex-direction:column}.studio-save-state .primary-button{width:100%}.portal-profile-tabs{grid-template-columns:1fr;padding:13px}.portal-profile-tabs button{grid-template-columns:auto minmax(0,1fr) auto}.portal-editor-fields{padding:14px 13px 18px}.editor-section{padding:15px}.editor-two-columns{grid-template-columns:1fr;gap:0}.promo-edit-card{grid-template-columns:1fr}.promo-image-control{min-height:160px}.portal-live-preview{padding:20px 15px}.portal-promotion-card{flex-basis:min(240px,88%)}}
 @media(max-width:420px){.portal-profile-tabs button i{display:none}.editor-section-heading{align-items:flex-start;flex-wrap:wrap}.promo-editor .editor-section-heading .outline-button{width:100%;margin-left:40px}.portal-announcement{padding:10px}.portal-promotion-card{flex-basis:90%}}
 .promo-card-topline{gap:6px}.promo-card-topline .promo-active{margin-right:4px}.promo-card-topline>button{color:#52706b;background:#edf5f3;font-size:12px}.promo-card-topline>button[data-delete-promo]{color:#b2514b;background:#fff1ef;font-size:16px}.promo-card-topline>button:disabled{cursor:not-allowed;opacity:.35}
+
+/* Mobile admin polish: persistent toolbar and contained promotion actions */
+@media(max-width:760px){
+  body.admin-view .dash-header{
+    position:fixed;
+    z-index:34;
+    top:0;
+    right:0;
+    left:0;
+    width:100%;
+    height:calc(74px + env(safe-area-inset-top));
+    min-height:calc(74px + env(safe-area-inset-top));
+    padding-top:calc(12px + env(safe-area-inset-top));
+    box-shadow:0 8px 24px #203d3820;
+  }
+  body.admin-view .dash-content{padding-top:calc(74px + env(safe-area-inset-top))}
+  body.admin-view .notification-panel{top:calc(78px + env(safe-area-inset-top))}
+  .promo-editor .editor-section-heading{
+    display:grid;
+    grid-template-columns:30px minmax(0,1fr);
+    align-items:start;
+    column-gap:10px;
+    row-gap:12px;
+  }
+  .promo-editor .editor-section-heading .outline-button{
+    grid-column:1/-1;
+    width:100%;
+    min-height:42px;
+    margin:0;
+    padding:10px 14px;
+    font-size:10px;
+  }
+}
+@media(max-width:420px){
+  .promo-editor .editor-section-heading .outline-button{width:100%;margin:0}
+}

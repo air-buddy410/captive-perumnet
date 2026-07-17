@@ -138,5 +138,7 @@ assert.match(css, /\.is-loading \.refresh-icon\{animation:refresh-spin/, 'Tombol
 assert.match(css, /\.profile-management-card/, 'Halaman CRUD pengguna harus memiliki kartu database yang responsif.');
 assert.match(css, /\.admin-user-modal/, 'Tambah dan edit pengguna harus menggunakan modal admin yang rapi.');
 assert.match(css, /body\.admin-view table\.profile-table\{display:block;width:100%;min-width:0;max-width:100%/, 'Tabel pengguna harus berubah menjadi kartu pada mobile.');
+assert.match(css, /Mobile admin polish[\s\S]*body\.admin-view \.dash-header\{\s*position:fixed;[\s\S]*safe-area-inset-top/, 'Header admin mobile harus tetap terlihat ketika halaman digulir dan menghormati safe area perangkat.');
+assert.match(css, /Mobile admin polish[\s\S]*\.promo-editor \.editor-section-heading \.outline-button\{\s*grid-column:1\/-1;\s*width:100%;[\s\S]*margin:0;/, 'Tombol tambah promo harus tetap berada di dalam kartu pada mobile.');
 
 console.log('Responsive UI contract: PASS');
