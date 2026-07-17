@@ -75,6 +75,9 @@ assert(['approval_status','approved_at'].every(name=>gatewayColumns.some(column=
 assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='gateway_blocks'").get(),'Migrasi harus menyediakan daftar blokir gateway.');
 const routeColumns = migrated.prepare('PRAGMA table_info(portal_network_routes)').all();
 assert(routeColumns.some(column=>column.name==='network_description'),'Migrasi harus menambahkan deskripsi VLAN tanpa merusak routing lama.');
+assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='portal_profile_content'").get(),'Migrasi harus menambahkan konten terpisah untuk Portal Akun dan Portal Free.');
+assert(migrated.prepare("SELECT COUNT(*) AS total FROM portal_profile_content").get().total===2,'Migrasi harus menginisialisasi tepat dua profil konten portal.');
+assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='portal_promotions'").get(),'Migrasi harus menyediakan penyimpanan promo dinamis.');
 const migratedRoutes = migrated.prepare("SELECT network_alias,client_cidr,portal_mode FROM portal_network_routes WHERE gateway_id='legacy-gateway'").all();
 assert(migratedRoutes.length===1 && migratedRoutes[0].network_alias==='VLAN99' && migratedRoutes[0].portal_mode==='free','Migrasi harus menggabungkan interface IP ke VLAN dan mempertahankan routing yang sudah dikonfigurasi.');
 migrated.close();

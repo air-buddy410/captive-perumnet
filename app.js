@@ -42,7 +42,72 @@ function mountAdminUsersPage() {
       </section>
     </div>`);
 }
+function mountPortalContentStudio() {
+  const settingsTab=$('#settings-tab');
+  if(!settingsTab || $('#portal-content-studio')) return;
+  settingsTab.querySelector('.settings-layout')?.classList.add('legacy-settings-layout');
+  settingsTab.querySelector('.settings-layout')?.setAttribute('aria-hidden','true');
+  settingsTab.querySelector('.portal-profile-grid')?.insertAdjacentHTML('afterend',`
+    <section class="portal-content-studio" id="portal-content-studio">
+      <header class="content-studio-header">
+        <div><span class="eyebrow">Editor konten dinamis</span><h3>Konten, pengumuman &amp; promo</h3><p>Edit kedua portal secara terpisah. Perubahan terlihat pada pratinjau sebelum disimpan.</p></div>
+        <div class="studio-save-state"><span id="portal-editor-status">Belum ada perubahan</span><button class="primary-button" id="save-portal-content" type="submit" form="portal-content-form">Simpan &amp; Terbitkan <span>→</span></button></div>
+      </header>
+      <div class="portal-profile-tabs" id="portal-profile-tabs" role="tablist" aria-label="Pilih profil portal">
+        <button class="active account" type="button" role="tab" aria-selected="true" data-profile="account"><span class="profile-tab-icon">AC</span><span><b>Portal Akun</b><small id="editor-account-ssid">@PERUMNET_WiFi</small></span><i>High Speed</i></button>
+        <button class="free" type="button" role="tab" aria-selected="false" data-profile="free"><span class="profile-tab-icon">FR</span><span><b>Portal Free</b><small id="editor-free-ssid">@PERUMNET_FreeWiFi</small></span><i>One Click</i></button>
+      </div>
+      <form id="portal-content-form" class="portal-content-form">
+        <div class="portal-editor-grid">
+          <div class="portal-editor-fields">
+            <section class="editor-section">
+              <div class="editor-section-heading"><span>01</span><div><h4>Identitas halaman</h4><p>SSID dan pesan utama yang dilihat pengguna.</p></div></div>
+              <label>SSID portal<input name="ssid" maxlength="128" required /></label>
+              <div class="editor-two-columns"><label>Label kecil<input name="eyebrow" maxlength="80" required /></label><label>Teks tombol utama<input name="primary_button_label" maxlength="80" required /></label></div>
+              <label>Judul utama<input name="headline" maxlength="160" required /></label>
+              <label>Deskripsi<textarea name="description" maxlength="700" required></textarea><small class="character-count" data-count-for="description">0 / 700</small></label>
+            </section>
+            <section class="editor-section announcement-editor">
+              <div class="editor-section-heading"><span>02</span><div><h4>Pengumuman</h4><p>Tampilkan informasi penting di atas area login.</p></div><label class="editor-switch"><input name="announcement_enabled" type="checkbox" /><span></span></label></div>
+              <div class="announcement-fields">
+                <label>Gaya pengumuman<select name="announcement_tone"><option value="info">Informasi</option><option value="promo">Promo</option><option value="warning">Penting</option></select></label>
+                <label>Judul pengumuman<input name="announcement_title" maxlength="140" placeholder="Contoh: Promo internet bulan ini" /></label>
+                <label>Isi pengumuman<textarea name="announcement_text" maxlength="700" placeholder="Tuliskan detail singkat dan jelas"></textarea></label>
+                <div class="editor-two-columns"><label>Teks link (opsional)<input name="announcement_link_label" maxlength="80" placeholder="Lihat selengkapnya" /></label><label>URL link (opsional)<input name="announcement_link_url" type="url" placeholder="https://..." /></label></div>
+              </div>
+            </section>
+            <section class="editor-section promo-editor">
+              <div class="editor-section-heading"><span>03</span><div><h4>Kartu promo</h4><p>Tambahkan hingga 6 promo bergambar untuk profil ini.</p></div><button class="outline-button" id="add-portal-promo" type="button">＋ Tambah Promo</button></div>
+              <div id="portal-promo-list" class="portal-promo-list"></div>
+            </section>
+            <details class="editor-section global-editor">
+              <summary><span>Pengaturan bersama</span><small>QoS &amp; ketentuan</small></summary>
+              <div class="editor-two-columns"><label>Referensi QoS Free (Kbps)<input id="portal-editor-bandwidth" type="number" min="64" max="100000" value="512" /></label><label>Durasi Free<output id="portal-editor-duration">2 jam · dari konfigurasi server</output></label></div>
+              <label>Syarat &amp; Ketentuan<textarea id="portal-editor-terms" maxlength="1200"></textarea></label>
+            </details>
+          </div>
+          <aside class="portal-live-preview">
+            <div class="live-preview-heading"><div><span>PRATINJAU LANGSUNG</span><b id="live-preview-profile">Portal Akun</b></div><small id="live-preview-ssid">@PERUMNET_WiFi</small></div>
+            <div class="live-preview-device">
+              <div class="live-preview-brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div>
+              <div class="live-preview-body">
+                <span class="eyebrow" id="live-preview-eyebrow">Akses pelanggan</span>
+                <h3 id="live-preview-title">Masuk ke internet cepat.</h3>
+                <p id="live-preview-description"></p>
+                <div id="live-preview-announcement"></div>
+                <div id="live-preview-promotions" class="live-preview-promotions"></div>
+                <div class="live-preview-inputs" id="live-preview-inputs"><i></i><i></i></div>
+                <div class="live-preview-button" id="live-preview-button">Login →</div>
+              </div>
+            </div>
+            <p class="preview-note">Pratinjau disederhanakan. Konten dan gambar akan mengikuti layout responsif portal sebenarnya.</p>
+          </aside>
+        </div>
+      </form>
+    </section>`);
+}
 mountAdminUsersPage();
+mountPortalContentStudio();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
 if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title='PerumNet — Internet Gratis'; }
 if (isGatewayReviewView) { document.body.classList.add('account-action-view'); $('#portal-screen').style.display='none'; document.title='PerumNet — Verifikasi Gateway'; }
@@ -63,6 +128,141 @@ let tableRefreshPromise;
 async function api(path, payload, method) { const requestMethod = method || (payload ? 'POST' : 'GET'); const hasBody = payload !== undefined && requestMethod !== 'GET'; const response = await fetch(path, { method:requestMethod, credentials:'same-origin', headers:hasBody ? { 'content-type':'application/json' } : undefined, body:hasBody ? JSON.stringify(payload) : undefined }); const raw = await response.text(); let result; try { result = JSON.parse(raw); } catch { throw new Error(response.ok ? 'Respons server portal tidak valid.' : `Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); } if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
 let portalSettings = {};
+const portalContentDefaults = {
+  account:{ profile:'account',ssid:'@PERUMNET_WiFi',eyebrow:'Akses pelanggan',headline:'Masuk ke internet cepat.',description:'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.',primary_button_label:'Login',announcement_enabled:false,announcement_tone:'info',announcement_title:'',announcement_text:'',announcement_link_label:'',announcement_link_url:'',promotions:[] },
+  free:{ profile:'free',ssid:'@PERUMNET_FreeWiFi',eyebrow:'Akses gratis',headline:'Terhubung dalam satu klik.',description:'Tidak perlu akun atau mengisi data diri. Tekan tombol di bawah untuk mulai menggunakan internet.',primary_button_label:'Sambungkan Internet Gratis',announcement_enabled:false,announcement_tone:'info',announcement_title:'',announcement_text:'',announcement_link_label:'',announcement_link_url:'',promotions:[] }
+};
+const portalEditorState = { activeProfile:'account',profiles:{ account:{...portalContentDefaults.account},free:{...portalContentDefaults.free} },promotions:[],dirty:false };
+function normalizedPortalProfiles(settings={}) {
+  return {
+    account:{ ...portalContentDefaults.account,...(settings.profiles?.account || {}),ssid:settings.profiles?.account?.ssid || settings.account_ssid || portalContentDefaults.account.ssid },
+    free:{ ...portalContentDefaults.free,...(settings.profiles?.free || {}),ssid:settings.profiles?.free?.ssid || settings.free_ssid || portalContentDefaults.free.ssid }
+  };
+}
+function createPortalExtras(profile) {
+  const host=document.createElement('div');
+  if(profile.announcement_enabled && profile.announcement_title && profile.announcement_text){
+    const notice=document.createElement('article');
+    notice.className=`portal-announcement ${profile.announcement_tone || 'info'}`;
+    const icon=document.createElement('span');
+    icon.className='portal-announcement-icon';
+    icon.textContent=profile.announcement_tone==='warning' ? '!' : profile.announcement_tone==='promo' ? '%' : 'i';
+    const copy=document.createElement('div');
+    const title=document.createElement('b'); title.textContent=profile.announcement_title;
+    const text=document.createElement('p'); text.textContent=profile.announcement_text;
+    copy.append(title,text);
+    if(profile.announcement_link_url && profile.announcement_link_label){
+      const link=document.createElement('a'); link.href=profile.announcement_link_url; link.textContent=`${profile.announcement_link_label} →`; link.target='_blank'; link.rel='noopener noreferrer'; copy.append(link);
+    }
+    notice.append(icon,copy); host.append(notice);
+  }
+  const promotions=Array.isArray(profile.promotions) ? profile.promotions.filter(item=>item.is_active!==false) : [];
+  if(promotions.length){
+    const list=document.createElement('div'); list.className='portal-promotion-strip'; list.setAttribute('aria-label','Promo dan informasi');
+    promotions.forEach(promo=>{
+      const card=document.createElement(promo.link_url ? 'a':'article');
+      card.className='portal-promotion-card';
+      if(promo.link_url){ card.href=promo.link_url; card.target='_blank'; card.rel='noopener noreferrer'; }
+      if(promo.image_url){ const image=document.createElement('img'); image.src=promo.image_url; image.alt=''; image.loading='lazy'; card.append(image); }
+      const copy=document.createElement('span');
+      const title=document.createElement('b'); title.textContent=promo.title;
+      copy.append(title);
+      if(promo.description){ const description=document.createElement('small'); description.textContent=promo.description; copy.append(description); }
+      if(promo.link_label){ const label=document.createElement('em'); label.textContent=`${promo.link_label} →`; copy.append(label); }
+      card.append(copy); list.append(card);
+    });
+    host.append(list);
+  }
+  return host;
+}
+function renderPublicPortalContent() {
+  const profiles=normalizedPortalProfiles(portalSettings);
+  const account=profiles.account,free=profiles.free;
+  $('#account-eyebrow').textContent=account.eyebrow;
+  $('#portal-title').textContent=account.headline;
+  $('#portal-copy').textContent=account.description;
+  $('#quick-login-form button[type="submit"]').firstChild.textContent=`${account.primary_button_label} `;
+  $('#free-eyebrow').textContent=free.eyebrow;
+  $('#free-title').textContent=free.headline;
+  $('#free-intro').textContent=free.description;
+  $('#free-connect .button-label').textContent=free.primary_button_label;
+  for(const [hostId,profile] of [['account-portal-extras',account],['free-portal-extras',free]]){
+    const host=$(`#${hostId}`); host.replaceChildren(...createPortalExtras(profile).childNodes);
+    host.hidden=!host.childElementCount;
+  }
+}
+function setPortalEditorDirty(dirty=true) {
+  portalEditorState.dirty=dirty;
+  const status=$('#portal-editor-status');
+  if(!status) return;
+  status.textContent=dirty ? 'Perubahan belum diterbitkan':'Semua perubahan sudah terbit';
+  status.classList.toggle('dirty',dirty);
+}
+function syncPortalEditorForm() {
+  const form=$('#portal-content-form');
+  if(!form) return;
+  const profile=portalEditorState.profiles[portalEditorState.activeProfile];
+  ['ssid','eyebrow','headline','description','primary_button_label','announcement_tone','announcement_title','announcement_text','announcement_link_label','announcement_link_url'].forEach(name=>{
+    const field=form.elements[name]; if(field) field.value=profile[name] || '';
+  });
+  form.elements.announcement_enabled.checked=!!profile.announcement_enabled;
+  $('.announcement-editor').classList.toggle('enabled',!!profile.announcement_enabled);
+  const descriptionCount=form.querySelector('[data-count-for="description"]');
+  descriptionCount.textContent=`${profile.description.length} / 700`;
+  renderPortalPromoEditor();
+  renderPortalLivePreview();
+}
+function renderPortalPromoEditor() {
+  const list=$('#portal-promo-list');
+  if(!list) return;
+  const promotions=portalEditorState.promotions.filter(item=>item.profile===portalEditorState.activeProfile);
+  if(!promotions.length){
+    list.innerHTML='<div class="promo-empty"><span>▧</span><b>Belum ada kartu promo</b><p>Tambahkan promo, menu baru, jadwal, atau pengumuman bergambar.</p></div>';
+    return;
+  }
+  list.innerHTML=promotions.map((promo,index)=>`
+    <article class="promo-edit-card" data-promo-id="${escapeHtml(promo.id)}">
+      <div class="promo-image-control">
+        ${promo.image_url ? `<img src="${escapeHtml(promo.image_url)}" alt="" />`:'<span><b>Gambar promo</b><small>PNG, JPG, WebP · maks. 3 MB</small></span>'}
+        <label><input type="file" accept="image/png,image/jpeg,image/webp" data-promo-upload="${escapeHtml(promo.id)}" /><span>${promo.image_url ? 'Ganti gambar':'Unggah gambar'}</span></label>
+      </div>
+      <div class="promo-edit-fields">
+        <div class="promo-card-topline"><b>Promo ${index+1}</b><label class="promo-active"><input type="checkbox" data-promo-field="is_active" ${promo.is_active!==false?'checked':''} /> Aktif</label><button type="button" data-move-promo="-1" aria-label="Naikkan promo" ${index===0?'disabled':''}>↑</button><button type="button" data-move-promo="1" aria-label="Turunkan promo" ${index===promotions.length-1?'disabled':''}>↓</button><button type="button" data-delete-promo="${escapeHtml(promo.id)}" aria-label="Hapus promo">×</button></div>
+        <label>Judul<input data-promo-field="title" maxlength="140" value="${escapeHtml(promo.title || '')}" placeholder="Judul promo" required /></label>
+        <label>Deskripsi<textarea data-promo-field="description" maxlength="700" placeholder="Detail singkat">${escapeHtml(promo.description || '')}</textarea></label>
+        <div class="editor-two-columns"><label>Teks link<input data-promo-field="link_label" maxlength="80" value="${escapeHtml(promo.link_label || '')}" placeholder="Lihat promo" /></label><label>URL tujuan<input data-promo-field="link_url" type="url" value="${escapeHtml(promo.link_url || '')}" placeholder="https://..." /></label></div>
+      </div>
+    </article>`).join('');
+}
+function renderPortalLivePreview() {
+  const profile=portalEditorState.profiles[portalEditorState.activeProfile];
+  const promotions=portalEditorState.promotions.filter(item=>item.profile===profile.profile && item.is_active!==false);
+  $('#live-preview-profile').textContent=profile.profile==='account' ? 'Portal Akun':'Portal Free';
+  $('#live-preview-ssid').textContent=profile.ssid;
+  $('#live-preview-eyebrow').textContent=profile.eyebrow;
+  $('#live-preview-title').textContent=profile.headline;
+  $('#live-preview-description').textContent=profile.description;
+  $('#live-preview-button').textContent=`${profile.primary_button_label} →`;
+  $('#live-preview-inputs').hidden=profile.profile==='free';
+  const announcement=$('#live-preview-announcement');
+  announcement.innerHTML=profile.announcement_enabled && profile.announcement_title
+    ? `<div class="preview-announcement ${escapeHtml(profile.announcement_tone)}"><b>${escapeHtml(profile.announcement_title)}</b><small>${escapeHtml(profile.announcement_text || '')}</small></div>`:'';
+  $('#live-preview-promotions').innerHTML=promotions.slice(0,3).map(promo=>`<div>${promo.image_url?`<img src="${escapeHtml(promo.image_url)}" alt="" />`:''}<span><b>${escapeHtml(promo.title || 'Promo')}</b><small>${escapeHtml(promo.description || '')}</small></span></div>`).join('');
+  $('.live-preview-device').classList.toggle('free',profile.profile==='free');
+}
+function hydratePortalEditor(settings) {
+  if(!$('#portal-content-studio')) return;
+  const profiles=normalizedPortalProfiles(settings);
+  portalEditorState.profiles={ account:{...profiles.account,promotions:undefined},free:{...profiles.free,promotions:undefined} };
+  portalEditorState.promotions=(settings.promotions || Object.values(profiles).flatMap(profile=>profile.promotions || [])).map(item=>({ ...item,is_active:item.is_active!==false }));
+  $('#portal-editor-bandwidth').value=settings.limited_bandwidth_kbps || 512;
+  $('#portal-editor-terms').value=settings.terms_text || '';
+  $('#portal-editor-duration').textContent=`${settings.limited_session_hours || 2} jam · dari konfigurasi server`;
+  $('#editor-account-ssid').textContent=profiles.account.ssid;
+  $('#editor-free-ssid').textContent=profiles.free.ssid;
+  syncPortalEditorForm();
+  setPortalEditorDirty(false);
+}
 const networkAliasPattern = /^(?:vlan|network|lan)[\s_-]*\d+$/i;
 function ssidFromGateway(context={}) { const candidates=[context.wlan_name,context.ssid_name,context.essid,context.wifi_name,context.ap_ssid,context.ssid,context.SSID]; return candidates.map(value=>String(value||'').trim()).find(value=>value && !networkAliasPattern.test(value)) || ''; }
 const gatewaySsid = ssidFromGateway(captiveContext);
@@ -89,6 +289,8 @@ async function loadPortalSettings() {
     if ($('#choice-bandwidth')) $('#choice-bandwidth').textContent = `${portalSettings.limited_bandwidth_kbps || 512} Kbps`;
     if ($('#choice-duration')) $('#choice-duration').textContent = `${portalSettings.limited_session_hours || 2} jam`;
     if ($('#free-duration')) $('#free-duration').textContent = `${portalSettings.limited_session_hours || 2} jam`;
+    renderPublicPortalContent();
+    hydratePortalEditor(portalSettings);
   } catch { setWifiName(gatewaySsid || (isFreeView ? '@PERUMNET_FreeWiFi' : '@PERUMNET_WiFi')); }
 }
 const leads = [];
@@ -669,4 +871,95 @@ $('#users-export-csv').onclick=async event=>{
 };
 $('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, histori monitoring, dan riwayat akses akan dihapus.' : `Perangkat, histori monitoring, dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminUsers(),loadAdminMonitoring(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
 $('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
+$('#portal-profile-tabs').onclick=event=>{
+  const button=event.target.closest('[data-profile]');
+  if(!button || button.dataset.profile===portalEditorState.activeProfile) return;
+  portalEditorState.activeProfile=button.dataset.profile;
+  document.querySelectorAll('#portal-profile-tabs [data-profile]').forEach(item=>{
+    const active=item===button; item.classList.toggle('active',active); item.setAttribute('aria-selected',String(active));
+  });
+  syncPortalEditorForm();
+};
+$('#portal-content-form').addEventListener('input',event=>{
+  const field=event.target;
+  if(field.closest('#portal-promo-list')) return;
+  if(field.name && Object.hasOwn(portalEditorState.profiles[portalEditorState.activeProfile],field.name)){
+    portalEditorState.profiles[portalEditorState.activeProfile][field.name]=field.type==='checkbox' ? field.checked:field.value;
+    if(field.name==='announcement_enabled') $('.announcement-editor').classList.toggle('enabled',field.checked);
+    if(field.name==='description') $('[data-count-for="description"]').textContent=`${field.value.length} / 700`;
+    if(field.name==='ssid') {
+      $(`#editor-${portalEditorState.activeProfile}-ssid`).textContent=field.value || 'SSID belum diisi';
+    }
+    renderPortalLivePreview(); setPortalEditorDirty();
+  } else if(field.id==='portal-editor-bandwidth' || field.id==='portal-editor-terms') setPortalEditorDirty();
+});
+$('#add-portal-promo').onclick=()=>{
+  const profile=portalEditorState.activeProfile;
+  if(portalEditorState.promotions.filter(item=>item.profile===profile).length>=6){ alert('Maksimal 6 promo untuk setiap profil portal.'); return; }
+  const promo={ id:crypto.randomUUID(),profile,title:'Promo baru',description:'Tuliskan informasi promo atau pengumuman di sini.',image_url:'',link_label:'',link_url:'',is_active:true };
+  portalEditorState.promotions.push(promo); renderPortalPromoEditor(); renderPortalLivePreview(); setPortalEditorDirty();
+  requestAnimationFrame(()=>document.querySelector(`[data-promo-id="${promo.id}"] input[data-promo-field="title"]`)?.select());
+};
+$('#portal-promo-list').addEventListener('input',event=>{
+  const field=event.target.closest('[data-promo-field]');
+  if(!field) return;
+  const card=field.closest('[data-promo-id]'),promo=portalEditorState.promotions.find(item=>item.id===card.dataset.promoId);
+  if(!promo) return;
+  promo[field.dataset.promoField]=field.type==='checkbox' ? field.checked:field.value;
+  renderPortalLivePreview(); setPortalEditorDirty();
+});
+$('#portal-promo-list').addEventListener('click',event=>{
+  const moveButton=event.target.closest('[data-move-promo]');
+  if(moveButton){
+    const card=moveButton.closest('[data-promo-id]'),visible=portalEditorState.promotions.filter(item=>item.profile===portalEditorState.activeProfile);
+    const current=visible.findIndex(item=>item.id===card.dataset.promoId),target=current+Number(moveButton.dataset.movePromo);
+    if(current<0 || target<0 || target>=visible.length) return;
+    const globalCurrent=portalEditorState.promotions.indexOf(visible[current]),globalTarget=portalEditorState.promotions.indexOf(visible[target]);
+    [portalEditorState.promotions[globalCurrent],portalEditorState.promotions[globalTarget]]=[portalEditorState.promotions[globalTarget],portalEditorState.promotions[globalCurrent]];
+    renderPortalPromoEditor(); renderPortalLivePreview(); setPortalEditorDirty(); return;
+  }
+  const button=event.target.closest('[data-delete-promo]');
+  if(!button) return;
+  const promo=portalEditorState.promotions.find(item=>item.id===button.dataset.deletePromo);
+  if(!promo || !confirm(`Hapus promo “${promo.title}”?`)) return;
+  portalEditorState.promotions=portalEditorState.promotions.filter(item=>item.id!==promo.id);
+  renderPortalPromoEditor(); renderPortalLivePreview(); setPortalEditorDirty();
+});
+$('#portal-promo-list').addEventListener('change',async event=>{
+  const input=event.target.closest('[data-promo-upload]');
+  if(!input || !input.files?.[0]) return;
+  const file=input.files[0],promo=portalEditorState.promotions.find(item=>item.id===input.dataset.promoUpload);
+  if(!promo) return;
+  if(file.size>3_000_000){ alert('Ukuran gambar maksimal 3 MB.'); input.value=''; return; }
+  const label=input.nextElementSibling,old=label.textContent; input.disabled=true; label.textContent='Mengunggah…';
+  try {
+    const data=await new Promise((resolve,reject)=>{ const reader=new FileReader(); reader.onload=()=>resolve(String(reader.result).split(',')[1] || ''); reader.onerror=()=>reject(new Error('Gambar tidak dapat dibaca.')); reader.readAsDataURL(file); });
+    const result=await api('/api/admin/uploads',{ filename:file.name,mimeType:file.type,data });
+    promo.image_url=result.url; renderPortalPromoEditor(); renderPortalLivePreview(); setPortalEditorDirty();
+  } catch(error) { alert(error.message); input.disabled=false; label.textContent=old; }
+});
+$('#portal-content-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const button=$('#save-portal-content'),old=button.innerHTML;
+  const account=portalEditorState.profiles.account,free=portalEditorState.profiles.free;
+  if(!account.ssid.trim() || !free.ssid.trim()){ alert('SSID Portal Akun dan Portal Free wajib diisi.'); return; }
+  if(account.ssid.trim().toLowerCase()===free.ssid.trim().toLowerCase()){ alert('SSID Portal Akun dan Portal Free harus berbeda.'); return; }
+  button.disabled=true; button.innerHTML='Menerbitkan…';
+  try {
+    const result=await api('/api/admin/portal-content',{
+      profiles:{ account,free },
+      promotions:portalEditorState.promotions,
+      limitedBandwidthKbps:Number($('#portal-editor-bandwidth').value || 512),
+      termsText:$('#portal-editor-terms').value
+    });
+    portalSettings=result;
+    $('#account-profile-ssid').textContent=result.profiles.account.ssid;
+    $('#free-profile-ssid').textContent=result.profiles.free.ssid;
+    $('#setting-account-ssid').value=result.profiles.account.ssid;
+    $('#setting-free-ssid').value=result.profiles.free.ssid;
+    renderPublicPortalContent(); hydratePortalEditor(result);
+    button.innerHTML='Sudah Terbit ✓';
+  } catch(error) { alert(error.message); button.innerHTML=old; }
+  finally { button.disabled=false; setTimeout(()=>{ if(button.innerHTML==='Sudah Terbit ✓') button.innerHTML=old; },1800); }
+});
 $('#settings-form').addEventListener('submit', async e => { e.preventDefault(); const accountSsid=$('#setting-account-ssid').value.trim() || '@PERUMNET_WiFi', freeSsid=$('#setting-free-ssid').value.trim() || '@PERUMNET_FreeWiFi', title=$('#setting-title').value || 'Masuk ke internet cepat.', copy=$('#setting-copy').value, terms=$('#setting-terms').value, bandwidth=Number($('#setting-bandwidth').value || 512); const b=e.currentTarget.querySelector('button'); const old=b.innerHTML; try { await api('/api/admin/settings', { accountSsid,freeSsid,welcomeTitle:title,welcomeText:copy,termsText:terms,limitedBandwidthKbps:bandwidth }); portalSettings={ ...portalSettings,account_ssid:accountSsid,free_ssid:freeSsid,default_ssid:accountSsid,welcome_title:title,welcome_text:copy,terms_text:terms,limited_bandwidth_kbps:bandwidth }; setWifiName(gatewaySsid || accountSsid); $('#portal-title').textContent=title; $('#portal-copy').textContent=copy; $('#account-profile-ssid').textContent=accountSsid; $('#free-profile-ssid').textContent=freeSsid; $('#preview-account-ssid').textContent=accountSsid; $('#preview-free-ssid').textContent=freeSsid; $('#preview-title').textContent=title; $('#preview-copy').textContent=copy; b.innerHTML='Tersimpan ✓'; } catch (error) { alert(error.message); } setTimeout(()=>b.innerHTML=old,1600); });

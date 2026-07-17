@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { readFile, appendFile, mkdir, stat } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, mkdir, stat } from 'node:fs/promises';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,8 @@ try { process.loadEnvFile?.('.env'); } catch { /* .env is optional for local dev
 const root = fileURLToPath(new URL('.', import.meta.url));
 const dataDir = process.env.PORTAL_DATA_DIR ? resolve(process.env.PORTAL_DATA_DIR) : join(root, 'data');
 await mkdir(dataDir, { recursive: true });
+const uploadsDir = join(dataDir, 'uploads');
+await mkdir(uploadsDir, { recursive: true });
 const db = new DatabaseSync(join(dataDir, 'portal.db'));
 db.exec(`
   PRAGMA foreign_keys = ON;
@@ -117,6 +119,28 @@ db.exec(`
     welcome_text TEXT NOT NULL, limited_bandwidth_kbps INTEGER NOT NULL DEFAULT 512,
     terms_text TEXT NOT NULL, google_sheet_id TEXT, updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS portal_profile_content (
+    profile TEXT PRIMARY KEY CHECK(profile IN ('account','free')),
+    eyebrow TEXT NOT NULL, headline TEXT NOT NULL, description TEXT NOT NULL,
+    primary_button_label TEXT NOT NULL,
+    announcement_enabled INTEGER NOT NULL DEFAULT 0,
+    announcement_tone TEXT NOT NULL DEFAULT 'info'
+      CHECK(announcement_tone IN ('info','promo','warning')),
+    announcement_title TEXT, announcement_text TEXT,
+    announcement_link_label TEXT, announcement_link_url TEXT,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS portal_promotions (
+    id TEXT PRIMARY KEY,
+    profile TEXT NOT NULL CHECK(profile IN ('account','free')),
+    title TEXT NOT NULL, description TEXT,
+    image_url TEXT, link_label TEXT, link_url TEXT,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_portal_promotions_profile
+    ON portal_promotions(profile,is_active,sort_order);
 `);
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN default_ssid TEXT NOT NULL DEFAULT 'PerumNet Guest'"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec("ALTER TABLE portal_settings ADD COLUMN account_ssid TEXT NOT NULL DEFAULT '@PERUMNET_WiFi'"); } catch { /* The column already exists after an upgrade. */ }
@@ -239,6 +263,15 @@ db.prepare(`INSERT OR IGNORE INTO portal_settings (id,welcome_title,welcome_text
 db.prepare(`UPDATE portal_settings SET welcome_title=?,welcome_text=?,updated_at=?
   WHERE id=1 AND welcome_title='Internet sesuai kebutuhan Anda.' AND welcome_text='Pilih akses cepat atau langsung terhubung dengan kecepatan terbatas.'`)
   .run('Masuk ke internet cepat.', 'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.', new Date().toISOString());
+const initialPortalSettings = db.prepare('SELECT welcome_title,welcome_text FROM portal_settings WHERE id=1').get();
+db.prepare(`INSERT OR IGNORE INTO portal_profile_content
+  (profile,eyebrow,headline,description,primary_button_label,announcement_enabled,announcement_tone,updated_at)
+  VALUES ('account',?,?,?,?,0,'info',?)`)
+  .run('Akses pelanggan', initialPortalSettings.welcome_title, initialPortalSettings.welcome_text, 'Login', new Date().toISOString());
+db.prepare(`INSERT OR IGNORE INTO portal_profile_content
+  (profile,eyebrow,headline,description,primary_button_label,announcement_enabled,announcement_tone,updated_at)
+  VALUES ('free',?,?,?,?,0,'info',?)`)
+  .run('Akses gratis', 'Terhubung dalam satu klik.', 'Tidak perlu akun atau mengisi data diri. Tekan tombol di bawah untuk mulai menggunakan internet.', 'Sambungkan Internet Gratis', new Date().toISOString());
 
 const config = {
   port: Number(process.env.PORT || 3000),
@@ -270,6 +303,88 @@ const text = (res, status, value, headers = {}) => res.writeHead(status, { 'cont
 const hashPassword = (password) => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 const verifyPassword = (password, stored) => { const [salt, key] = stored.split(':'); const actual = scryptSync(password, salt, 64).toString('hex'); return timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(key, 'hex')); };
 const hashToken = (token) => createHash('sha256').update(token).digest('hex');
+const portalProfileDefaults = {
+  account:{
+    eyebrow:'Akses pelanggan',
+    headline:'Masuk ke internet cepat.',
+    description:'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.',
+    primary_button_label:'Login'
+  },
+  free:{
+    eyebrow:'Akses gratis',
+    headline:'Terhubung dalam satu klik.',
+    description:'Tidak perlu akun atau mengisi data diri. Tekan tombol di bawah untuk mulai menggunakan internet.',
+    primary_button_label:'Sambungkan Internet Gratis'
+  }
+};
+function publicPortalSettings() {
+  const settings = db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid,account_ssid,free_ssid FROM portal_settings WHERE id=1').get();
+  const content = db.prepare(`SELECT profile,eyebrow,headline,description,primary_button_label,
+    announcement_enabled,announcement_tone,announcement_title,announcement_text,
+    announcement_link_label,announcement_link_url,updated_at
+    FROM portal_profile_content ORDER BY profile`).all();
+  const promotions = db.prepare(`SELECT id,profile,title,description,image_url,link_label,link_url,is_active,sort_order
+    FROM portal_promotions ORDER BY profile,sort_order,id`).all();
+  const profiles = {};
+  for (const profile of ['account','free']) {
+    const row = content.find(item => item.profile === profile) || { profile,...portalProfileDefaults[profile] };
+    profiles[profile] = {
+      ...row,
+      ssid:profile === 'account' ? settings.account_ssid : settings.free_ssid,
+      announcement_enabled:!!row.announcement_enabled,
+      promotions:promotions.filter(item => item.profile === profile && item.is_active).map(item => ({ ...item,is_active:true }))
+    };
+  }
+  return { ...settings,profiles,promotions:promotions.map(item => ({ ...item,is_active:!!item.is_active })),limited_session_hours:sessionHoursFor('limited') };
+}
+function normalizedPortalUrl(value, fieldName) {
+  const candidate = String(value || '').trim();
+  if (!candidate) return null;
+  if (candidate.startsWith('/uploads/') && /^\/uploads\/[a-f0-9-]+\.(?:png|jpe?g|webp)$/i.test(candidate)) return candidate;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return parsed.toString().slice(0,1000);
+  } catch { /* Validation below returns a useful admin-facing error. */ }
+  throw new Error(`${fieldName} harus menggunakan URL http/https yang valid.`);
+}
+function normalizedPortalText(value, fallback, maxLength, fieldName, required = true) {
+  const normalized = String(value ?? '').trim().replace(/\r\n/g,'\n').slice(0,maxLength);
+  if (required && !normalized) throw new Error(`${fieldName} wajib diisi.`);
+  return normalized || fallback || null;
+}
+function normalizePortalProfile(profile, value = {}) {
+  const defaults = portalProfileDefaults[profile];
+  return {
+    profile,
+    ssid:normalizedPortalText(value.ssid, profile === 'account' ? '@PERUMNET_WiFi' : '@PERUMNET_FreeWiFi',128,`SSID Portal ${profile === 'account' ? 'Akun' : 'Free'}`),
+    eyebrow:normalizedPortalText(value.eyebrow,defaults.eyebrow,80,'Label kecil'),
+    headline:normalizedPortalText(value.headline,defaults.headline,160,'Judul portal'),
+    description:normalizedPortalText(value.description,defaults.description,700,'Deskripsi portal'),
+    primary_button_label:normalizedPortalText(value.primary_button_label,defaults.primary_button_label,80,'Teks tombol'),
+    announcement_enabled:value.announcement_enabled ? 1 : 0,
+    announcement_tone:['info','promo','warning'].includes(value.announcement_tone) ? value.announcement_tone : 'info',
+    announcement_title:normalizedPortalText(value.announcement_title,null,140,'Judul pengumuman',false),
+    announcement_text:normalizedPortalText(value.announcement_text,null,700,'Isi pengumuman',false),
+    announcement_link_label:normalizedPortalText(value.announcement_link_label,null,80,'Teks link pengumuman',false),
+    announcement_link_url:normalizedPortalUrl(value.announcement_link_url,'Link pengumuman')
+  };
+}
+function normalizePortalPromotion(value = {}, index = 0) {
+  const profile = value.profile === 'free' ? 'free' : value.profile === 'account' ? 'account' : '';
+  if (!profile) throw new Error('Setiap promo harus terkait dengan Portal Akun atau Portal Free.');
+  const promoId = /^[a-f0-9-]{8,80}$/i.test(String(value.id || '')) ? String(value.id) : id();
+  return {
+    id:promoId,
+    profile,
+    title:normalizedPortalText(value.title,null,140,'Judul promo'),
+    description:normalizedPortalText(value.description,null,700,'Deskripsi promo',false),
+    image_url:normalizedPortalUrl(value.image_url,'Gambar promo'),
+    link_label:normalizedPortalText(value.link_label,null,80,'Teks tombol promo',false),
+    link_url:normalizedPortalUrl(value.link_url,'Link promo'),
+    is_active:value.is_active === false ? 0 : 1,
+    sort_order:index
+  };
+}
 function sessionHoursFor(accessType) {
   const configured = accessType === 'limited' ? config.wifiDogLimitedSessionHours : config.wifiDogSessionHours;
   const fallback = accessType === 'limited' ? 2 : 12;
@@ -943,8 +1058,7 @@ function monitoringData(url) {
 async function api(req, res, url) {
   const route = url.pathname;
   if (route === '/api/settings' && req.method === 'GET') {
-    const settings = db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid,account_ssid,free_ssid FROM portal_settings WHERE id=1').get();
-    return json(res, 200, { ...settings, limited_session_hours:sessionHoursFor('limited') });
+    return json(res, 200, publicPortalSettings(), { 'cache-control':'no-store' });
   }
   if (route === '/api/auth/register' && req.method === 'POST') {
     const { fullName, email, phone, address, password, consent, context } = await body(req);
@@ -1385,19 +1499,106 @@ async function api(req, res, url) {
     if (result.error) return json(res, result.status, { error:result.error });
     return json(res, 200, result);
   }
+  if (route === '/api/admin/uploads' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const mimeType = String(payload.mimeType || '').toLowerCase();
+    const extensionByMime = { 'image/png':'png','image/jpeg':'jpg','image/webp':'webp' };
+    const extension = extensionByMime[mimeType];
+    if (!extension) return json(res, 400, { error:'Gambar harus berformat PNG, JPG, atau WebP.' });
+    const encoded = String(payload.data || '').replace(/^data:[^;]+;base64,/,'');
+    if (!encoded || encoded.length > 4_200_000) return json(res, 413, { error:'Ukuran gambar maksimal 3 MB.' });
+    let buffer;
+    try { buffer = Buffer.from(encoded,'base64'); }
+    catch { return json(res, 400, { error:'Data gambar tidak valid.' }); }
+    if (!buffer.length || buffer.length > 3_000_000) return json(res, 413, { error:'Ukuran gambar maksimal 3 MB.' });
+    const isPng = buffer.length > 8 && buffer.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+    const isJpeg = buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    const isWebp = buffer.length > 12 && buffer.subarray(0,4).toString() === 'RIFF' && buffer.subarray(8,12).toString() === 'WEBP';
+    if ((mimeType === 'image/png' && !isPng) || (mimeType === 'image/jpeg' && !isJpeg) || (mimeType === 'image/webp' && !isWebp)) {
+      return json(res, 400, { error:'Isi file tidak sesuai dengan format gambar.' });
+    }
+    const filename = `${Date.now()}-${randomBytes(10).toString('hex')}.${extension}`;
+    await writeFile(join(uploadsDir,filename),buffer,{ flag:'wx' });
+    return json(res, 201, { url:`/uploads/${filename}`,size:buffer.length,mimeType });
+  }
+  if (route === '/api/admin/portal-content' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    let account;
+    let free;
+    let promotions;
+    let bandwidth;
+    let termsText;
+    try {
+      account = normalizePortalProfile('account',payload.profiles?.account);
+      free = normalizePortalProfile('free',payload.profiles?.free);
+      if (account.ssid.toLowerCase() === free.ssid.toLowerCase()) throw new Error('SSID Portal Akun dan Portal Free harus berbeda.');
+      if (account.announcement_enabled && (!account.announcement_title || !account.announcement_text)) throw new Error('Judul dan isi pengumuman Portal Akun wajib diisi saat pengumuman aktif.');
+      if (free.announcement_enabled && (!free.announcement_title || !free.announcement_text)) throw new Error('Judul dan isi pengumuman Portal Free wajib diisi saat pengumuman aktif.');
+      const rawPromotions = Array.isArray(payload.promotions) ? payload.promotions : [];
+      if (rawPromotions.length > 12) throw new Error('Maksimal 12 promo aktif untuk seluruh portal.');
+      if (rawPromotions.filter(item => item.profile === 'account').length > 6 || rawPromotions.filter(item => item.profile === 'free').length > 6) {
+        throw new Error('Maksimal 6 promo untuk setiap profil portal.');
+      }
+      promotions = rawPromotions.map(normalizePortalPromotion);
+      const requestedBandwidth = Number(payload.limitedBandwidthKbps || 512);
+      if (!Number.isFinite(requestedBandwidth)) throw new Error('Referensi QoS harus berupa angka.');
+      bandwidth = Math.min(100000,Math.max(64,requestedBandwidth));
+      termsText = normalizedPortalText(payload.termsText,'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan.',1200,'Syarat dan ketentuan');
+    } catch (error) {
+      return json(res, 400, { error:error.message });
+    }
+    const now = new Date().toISOString();
+    try {
+      db.exec('BEGIN IMMEDIATE');
+      db.prepare(`UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,
+        default_ssid=?,account_ssid=?,free_ssid=?,updated_at=? WHERE id=1`)
+        .run(account.headline,account.description,bandwidth,termsText,account.ssid,account.ssid,free.ssid,now);
+      const saveProfile = db.prepare(`INSERT INTO portal_profile_content
+        (profile,eyebrow,headline,description,primary_button_label,announcement_enabled,announcement_tone,
+          announcement_title,announcement_text,announcement_link_label,announcement_link_url,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(profile) DO UPDATE SET eyebrow=excluded.eyebrow,headline=excluded.headline,
+          description=excluded.description,primary_button_label=excluded.primary_button_label,
+          announcement_enabled=excluded.announcement_enabled,announcement_tone=excluded.announcement_tone,
+          announcement_title=excluded.announcement_title,announcement_text=excluded.announcement_text,
+          announcement_link_label=excluded.announcement_link_label,announcement_link_url=excluded.announcement_link_url,
+          updated_at=excluded.updated_at`);
+      for (const profile of [account,free]) {
+        saveProfile.run(profile.profile,profile.eyebrow,profile.headline,profile.description,profile.primary_button_label,
+          profile.announcement_enabled,profile.announcement_tone,profile.announcement_title,profile.announcement_text,
+          profile.announcement_link_label,profile.announcement_link_url,now);
+      }
+      db.prepare('DELETE FROM portal_promotions').run();
+      const savePromotion = db.prepare(`INSERT INTO portal_promotions
+        (id,profile,title,description,image_url,link_label,link_url,is_active,sort_order,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+      for (const promotion of promotions) savePromotion.run(promotion.id,promotion.profile,promotion.title,promotion.description,
+        promotion.image_url,promotion.link_label,promotion.link_url,promotion.is_active,promotion.sort_order,now,now);
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch { /* Transaction may already be closed. */ }
+      throw error;
+    }
+    return json(res, 200, publicPortalSettings(), { 'cache-control':'no-store' });
+  }
   if (route === '/api/admin/settings' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
     const { welcomeTitle,welcomeText,limitedBandwidthKbps,termsText,googleSheetId,accountSsid,freeSsid } = await body(req);
     const normalizedAccountSsid = String(accountSsid || '@PERUMNET_WiFi').trim().slice(0,128);
     const normalizedFreeSsid = String(freeSsid || '@PERUMNET_FreeWiFi').trim().slice(0,128);
     if (!normalizedAccountSsid || !normalizedFreeSsid) return json(res, 400, { error:'Kedua SSID portal wajib diisi.' });
+    if (normalizedAccountSsid.toLowerCase() === normalizedFreeSsid.toLowerCase()) return json(res, 400, { error:'SSID Portal Akun dan Portal Free harus berbeda.' });
     db.prepare('UPDATE portal_settings SET welcome_title=?,welcome_text=?,limited_bandwidth_kbps=?,terms_text=?,google_sheet_id=?,default_ssid=?,account_ssid=?,free_ssid=?,updated_at=? WHERE id=1')
       .run(welcomeTitle, welcomeText, Number(limitedBandwidthKbps || 512), termsText, googleSheetId || null, normalizedAccountSsid, normalizedAccountSsid, normalizedFreeSsid, new Date().toISOString());
+    db.prepare(`UPDATE portal_profile_content SET headline=?,description=?,updated_at=? WHERE profile='account'`)
+      .run(welcomeTitle,welcomeText,new Date().toISOString());
     return json(res, 200, { ok:true, accountSsid:normalizedAccountSsid, freeSsid:normalizedFreeSsid });
   }
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
 }
-const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.svg':'image/svg+xml' };
+const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.webp':'image/webp', '.svg':'image/svg+xml' };
 const server = createServer(async (req, res) => {
   // A request-target beginning with // is treated as a host by WHATWG URL.
   // ReyeeOS sends exactly that form for WiFiDog, so keep it as a path.
@@ -1445,6 +1646,18 @@ const server = createServer(async (req, res) => {
       res.writeHead(302, { location: `${config.baseUrl}${freeSession ? '/free' : '/'}?connected=1` }); return res.end();
     }
     if (url.pathname.startsWith('/api/')) return await api(req,res,url);
+    if (url.pathname.startsWith('/uploads/')) {
+      const filename = url.pathname.slice('/uploads/'.length);
+      if (!/^[a-f0-9-]+\.(?:png|jpe?g|webp)$/i.test(filename)) return json(res, 404, { error:'Gambar tidak ditemukan.' });
+      const target = join(uploadsDir,filename);
+      await stat(target);
+      res.writeHead(200, {
+        'content-type':mime[extname(target).toLowerCase()] || 'application/octet-stream',
+        'cache-control':'public, max-age=31536000, immutable',
+        'x-content-type-options':'nosniff'
+      });
+      return res.end(await readFile(target));
+    }
     let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname === '/free' || url.pathname === '/free/' || url.pathname === '/gateway-review' || url.pathname === '/gateway-review/') ? '/index.html' : url.pathname;
     const target = normalize(join(root, pathname));
     if (!target.startsWith(root)) return json(res, 403, { error: 'Forbidden' });
