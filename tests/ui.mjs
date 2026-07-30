@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [html, css, app, favicon, server] = await Promise.all([
+const [html, css, app, favicon, server, envExample] = await Promise.all([
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../styles.css', import.meta.url), 'utf8'),
   readFile(new URL('../app.js', import.meta.url), 'utf8'),
   readFile(new URL('../assets/perumnet-favicon.png', import.meta.url)),
-  readFile(new URL('../server.mjs', import.meta.url), 'utf8')
+  readFile(new URL('../server.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('../.env.example', import.meta.url), 'utf8')
 ]);
 
 assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Status koneksi harus memakai modal.');
@@ -124,6 +125,9 @@ assert.match(app, /\/api\/auth\/forgot-password/, 'UI harus dapat meminta email 
 assert.match(app, /\/api\/auth\/reset-password/, 'UI harus dapat menyimpan kata sandi baru.');
 assert.match(server, /SMTP_TLS_SERVERNAME/, 'SMTP melalui jaringan privat harus tetap memverifikasi hostname sertifikat provider.');
 assert.match(server, /tls:config\.smtpTlsServername/, 'Transport email harus menerapkan hostname TLS yang dikonfigurasi.');
+assert.doesNotMatch(envExample, /@perumnet\.id|mail\.perumnet\.id|smtp\.hostinger\.com/, 'Contoh environment tidak boleh memakai identitas provider produksi.');
+assert.match(envExample, /^SMTP_PASSWORD=CHANGEME_NOT_A_REAL_SECRET$/m, 'Contoh SMTP harus memakai placeholder yang jelas dan tidak menyerupai credential nyata.');
+assert.match(envExample, /^ADMIN_PASSWORD=CHANGEME_NOT_A_REAL_SECRET$/m, 'Contoh admin harus memakai placeholder yang jelas dan tidak menyerupai credential nyata.');
 assert.match(app, /showAccountStatus\('Email berhasil diverifikasi\.','Kembali ke jendela login WiFi/, 'Verifikasi email tidak boleh mengarahkan user ke form hotspot.');
 assert.match(css, /body\.admin-view \.sidebar \.sidebar-brand[^}]*background:transparent/, 'Logo admin harus menyatu dengan sidebar.');
 assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpoint kartu mobile.');
