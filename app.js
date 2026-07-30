@@ -1,4 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
 const screens = { portal: $('#portal-screen'), free:$('#free-screen'), success: $('#success-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), gatewayReview:$('#gateway-review-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
 // Preserve every query parameter forwarded by the gateway. WiFiDog uses
 // gw_address, gw_port, gw_id, mac, url, and token.
@@ -6,6 +7,16 @@ const captiveContext = Object.fromEntries(new URLSearchParams(location.search).e
 const isAdminView = location.pathname === '/admin' || location.pathname === '/admin/';
 const isFreeView = location.pathname === '/free' || location.pathname === '/free/' || location.pathname.startsWith('/free/auth/wifidogAuth/login');
 const isGatewayReviewView = location.pathname === '/gateway-review' || location.pathname === '/gateway-review/';
+const canonicalPortalOrigin = 'https://hotspot.perumnet.com';
+function applyCanonicalPortalLinks() {
+  const sidebarBrand = $('.sidebar-brand');
+  if (sidebarBrand) sidebarBrand.href = `${canonicalPortalOrigin}/`;
+  const routingCode = $('.portal-routing-heading code');
+  if (routingCode) routingCode.textContent = canonicalPortalOrigin;
+  const profileCodes = $$('.portal-profile-card code');
+  if (profileCodes[0]) profileCodes[0].textContent = `${canonicalPortalOrigin}/`;
+  if (profileCodes[1]) profileCodes[1].textContent = `${canonicalPortalOrigin}/free`;
+}
 function mountAdminUsersPage() {
   if($('#users-tab')) return;
   $('#network-tab').insertAdjacentHTML('beforebegin',`
@@ -62,13 +73,13 @@ function mountPortalContentStudio() {
           <div class="portal-editor-fields">
             <section class="editor-section">
               <div class="editor-section-heading"><span>01</span><div><h4>Identitas halaman</h4><p>SSID dan pesan utama yang dilihat pengguna.</p></div></div>
-              <label>SSID portal<input name="ssid" maxlength="128" required /></label>
+              <div class="editor-two-columns"><label>SSID portal<input name="ssid" maxlength="128" required /></label><label>Bahasa halaman<select name="language"><option value="id">Bahasa Indonesia</option><option value="en">English</option></select></label></div>
               <div class="editor-two-columns"><label>Label kecil<input name="eyebrow" maxlength="80" required /></label><label>Teks tombol utama<input name="primary_button_label" maxlength="80" required /></label></div>
               <label>Judul utama<input name="headline" maxlength="160" required /></label>
               <label>Deskripsi<textarea name="description" maxlength="700" required></textarea><small class="character-count" data-count-for="description">0 / 700</small></label>
             </section>
             <section class="editor-section announcement-editor">
-              <div class="editor-section-heading"><span>02</span><div><h4>Pengumuman</h4><p>Tampilkan informasi penting di atas area login.</p></div><label class="editor-switch"><input name="announcement_enabled" type="checkbox" /><span></span></label></div>
+              <div class="editor-section-heading"><span>02</span><div><h4>Pengumuman</h4><p>Tampilkan informasi penting di atas area login.</p></div><label class="editor-switch"><input name="announcement_enabled" type="checkbox" role="switch" aria-label="Tampilkan pengumuman di halaman portal" /><span class="editor-switch-copy"><b><span class="switch-status-off">Nonaktif</span><span class="switch-status-on">Aktif</span></b><small><span class="switch-detail-off">Tidak tampil</span><span class="switch-detail-on">Tampil di portal</span></small></span><span class="editor-switch-control" aria-hidden="true"></span></label></div>
               <div class="announcement-fields">
                 <label>Gaya pengumuman<select name="announcement_tone"><option value="info">Informasi</option><option value="promo">Promo</option><option value="warning">Penting</option></select></label>
                 <label>Judul pengumuman<input name="announcement_title" maxlength="140" placeholder="Contoh: Promo internet bulan ini" /></label>
@@ -108,6 +119,7 @@ function mountPortalContentStudio() {
 }
 mountAdminUsersPage();
 mountPortalContentStudio();
+applyCanonicalPortalLinks();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
 if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title='PerumNet — Internet Gratis'; }
 if (isGatewayReviewView) { document.body.classList.add('account-action-view'); $('#portal-screen').style.display='none'; document.title='PerumNet — Verifikasi Gateway'; }
@@ -125,12 +137,33 @@ let analyticsTimer;
 let searchTimer;
 let adminRefreshPromise;
 let tableRefreshPromise;
-async function api(path, payload, method) { const requestMethod = method || (payload ? 'POST' : 'GET'); const hasBody = payload !== undefined && requestMethod !== 'GET'; const response = await fetch(path, { method:requestMethod, credentials:'same-origin', headers:hasBody ? { 'content-type':'application/json' } : undefined, body:hasBody ? JSON.stringify(payload) : undefined }); const raw = await response.text(); let result; try { result = JSON.parse(raw); } catch { throw new Error(response.ok ? 'Respons server portal tidak valid.' : `Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); } if (!response.ok) throw new Error(result.error || 'Permintaan gagal.'); return result; }
+async function api(path,payload,method) {
+  const requestMethod=method || (payload?'POST':'GET');
+  const hasBody=payload!==undefined && requestMethod!=='GET';
+  const response=await fetch(path,{ method:requestMethod,credentials:'same-origin',headers:hasBody?{ 'content-type':'application/json' }:undefined,body:hasBody?JSON.stringify(payload):undefined });
+  const raw=await response.text();
+  let result;
+  try { result=JSON.parse(raw); }
+  catch { throw new Error(response.ok?'Respons server portal tidak valid.':`Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); }
+  if(!response.ok){
+    if(response.status===401 && isAdminView && path!=='/api/admin/login'){
+      clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer);
+      show('login');
+      $('#login-screen .admin-login-card > p').textContent='Sesi admin berakhir setelah 3 jam. Silakan masuk kembali untuk melanjutkan.';
+    }
+    throw new Error(result.error || 'Permintaan gagal.');
+  }
+  return result;
+}
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
 let portalSettings = {};
 const portalContentDefaults = {
-  account:{ profile:'account',ssid:'@PERUMNET_WiFi',eyebrow:'Akses pelanggan',headline:'Masuk ke internet cepat.',description:'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.',primary_button_label:'Login',announcement_enabled:false,announcement_tone:'info',announcement_title:'',announcement_text:'',announcement_link_label:'',announcement_link_url:'',promotions:[] },
-  free:{ profile:'free',ssid:'@PERUMNET_FreeWiFi',eyebrow:'Akses gratis',headline:'Terhubung dalam satu klik.',description:'Tidak perlu akun atau mengisi data diri. Tekan tombol di bawah untuk mulai menggunakan internet.',primary_button_label:'Sambungkan Internet Gratis',announcement_enabled:false,announcement_tone:'info',announcement_title:'',announcement_text:'',announcement_link_label:'',announcement_link_url:'',promotions:[] }
+  account:{ profile:'account',language:'id',ssid:'@PERUMNET_WiFi',eyebrow:'Akses pelanggan',headline:'Masuk ke internet cepat.',description:'Gunakan akun PerumNet yang sudah terverifikasi atau daftar untuk mendapatkan akses High Speed.',primary_button_label:'Login',announcement_enabled:false,announcement_tone:'info',announcement_title:'',announcement_text:'',announcement_link_label:'',announcement_link_url:'',promotions:[] },
+  free:{ profile:'free',language:'id',ssid:'@PERUMNET_FreeWiFi',eyebrow:'Akses gratis',headline:'Terhubung dalam satu klik.',description:'Tidak perlu akun atau mengisi data diri. Tekan tombol di bawah untuk mulai menggunakan internet.',primary_button_label:'Sambungkan Internet Gratis',announcement_enabled:false,announcement_tone:'info',announcement_title:'',announcement_text:'',announcement_link_label:'',announcement_link_url:'',promotions:[] }
+};
+const portalEnglishDefaults = {
+  account:{ eyebrow:'Customer access',headline:'Sign in for high-speed internet.',description:'Use your verified PerumNet account or register to enjoy High Speed access.',primary_button_label:'Sign In' },
+  free:{ eyebrow:'Free access',headline:'Connect in one click.',description:'No account or personal details required. Press the button below to start using the internet.',primary_button_label:'Connect to Free Internet' }
 };
 const portalEditorState = { activeProfile:'account',profiles:{ account:{...portalContentDefaults.account},free:{...portalContentDefaults.free} },promotions:[],dirty:false };
 function normalizedPortalProfiles(settings={}) {
@@ -175,6 +208,94 @@ function createPortalExtras(profile) {
   }
   return host;
 }
+function setLeadingCopy(selector,value) {
+  const element=$(selector);
+  const node=element ? [...element.childNodes].find(item=>item.nodeType===Node.TEXT_NODE && item.textContent.trim()) : null;
+  if(node) node.textContent=`${value} `;
+}
+function setLabelCopy(selector,value) {
+  const target=$(selector);
+  const label=target?.matches('label') ? target:target?.closest('label');
+  const node=label ? [...label.childNodes].find(item=>item.nodeType===Node.TEXT_NODE && item.textContent.trim()) : null;
+  if(node) node.textContent=value;
+}
+function applyAccountLanguage(language='id') {
+  const english=language==='en';
+  document.documentElement.lang=english?'en':'id';
+  $('.portal-visual .visual-copy .eyebrow').textContent=english?'WiFi that connects you with your customers':'WiFi yang terhubung dengan pelanggan Anda';
+  $('.portal-visual .visual-copy h1').innerHTML=english?'More than just<br><em>free internet.</em>':'Lebih dari sekadar<br><em>internet gratis.</em>';
+  $('.portal-visual .visual-copy p').textContent=english?'Deliver a smooth connection experience, understand every visitor, and build stronger relationships.':'Berikan pengalaman koneksi yang mulus, kenali setiap pengunjung, dan bangun relasi yang lebih dekat.';
+  setLeadingCopy('#portal-form-wrap .form-topline',english?'You are connected to':'Anda terhubung ke');
+  setLeadingCopy('#access-choice .form-topline',english?'You are connected to':'Anda terhubung ke');
+  const heading=$('#portal-form-wrap .form-heading');
+  heading.querySelector('.eyebrow').textContent=english?'Create a PerumNet account':'Buat akun PerumNet';
+  heading.querySelector('h2').textContent=english?'Get unlimited access.':'Dapatkan akses tanpa batas.';
+  heading.querySelector('p').textContent=english?'Register once, verify your email, then enjoy High Speed access every time you visit.':'Daftar sekali, verifikasi email, lalu nikmati koneksi High Speed setiap kali berkunjung.';
+  const registrationLabels={ name:english?'Full name':'Nama lengkap',email:'Email',phone:english?'WhatsApp number':'Nomor WhatsApp',address:english?'Address':'Alamat',password:english?'Password':'Kata sandi' };
+  Object.entries(registrationLabels).forEach(([name,label])=>setLabelCopy(`#lead-form [name="${name}"]`,label));
+  $('#lead-form [name="name"]').placeholder=english?'Example: Made Wirawan':'Contoh: Made Wirawan';
+  $('#lead-form [name="phone"]').placeholder=english?'08xx xxxx xxxx':'08xx xxxx xxxx';
+  $('#lead-form [name="address"]').placeholder=english?'City or home address':'Kota atau alamat tempat tinggal';
+  $('#lead-form [name="password"]').placeholder=english?'At least 8 characters':'Minimal 8 karakter';
+  $('#lead-form .consent span').innerHTML=english?'I agree to the <a href="#">Terms &amp; Conditions</a> and the processing of my data for PerumNet information and offers.':'Saya setuju dengan <a href="#">Syarat &amp; Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari PerumNet.';
+  setLeadingCopy('#lead-form .primary-button',english?'Register & Verify Email':'Daftar & Verifikasi Email');
+  setLeadingCopy('.account-prompt',english?'Already have an account?':'Sudah punya akun?');
+  $('#open-user-login').textContent=english?'Sign in now':'Masuk sekarang';
+  $('#back-to-access-choice').textContent=english?'← Back to sign in':'← Kembali ke halaman login';
+  $('#portal-form-wrap .privacy-note span:last-child').textContent=english?'Your data is protected and will not be shared with other parties.':'Data Anda terlindungi dan tidak akan dibagikan ke pihak lain.';
+  $('#quick-login-form .quick-login-heading b').textContent=english?'Already have an account?':'Sudah punya akun?';
+  $('#quick-login-form .quick-login-heading span').textContent=english?'Sign in for High Speed access':'Login langsung untuk akses High Speed';
+  setLabelCopy('#quick-login-form input[type="email"]', 'Email');
+  setLabelCopy('#quick-login-form input[type="password"]',english?'Password':'Kata sandi');
+  $('#quick-login-form input[type="password"]').placeholder=english?'Password':'Kata sandi';
+  $('#quick-login-form .forgot-password-link').textContent=english?'Forgot password?':'Lupa kata sandi?';
+  $('#choose-high-speed b').textContent=english?'No account yet?':'Belum punya akun?';
+  $('#choose-high-speed strong').textContent=english?'Register for High Speed':'Daftar akun High Speed';
+  $('#choose-high-speed small').textContent=english?'Register once and reuse your account on every visit.':'Daftar sekali dan gunakan akun Anda setiap kali berkunjung.';
+  $('#access-choice .choice-terms').innerHTML=english?'By signing in or registering, you agree to the <a href="#">network terms of use</a>.':'Dengan masuk atau mendaftar, Anda menyetujui <a href="#">Ketentuan penggunaan jaringan</a>.';
+  const loginCard=$('#user-login-screen .login-card');
+  loginCard.querySelector('.eyebrow').textContent=english?'Customer account':'Akun pelanggan';
+  loginCard.querySelector('h2').textContent=english?'Sign in for high-speed internet':'Masuk untuk internet cepat';
+  loginCard.querySelector(':scope > p').textContent=english?'Use your verified account to get High Speed access.':'Gunakan akun yang telah terverifikasi untuk memperoleh akses High Speed.';
+  setLabelCopy('#user-login-form input[type="email"]','Email');
+  setLabelCopy('#user-login-form input[type="password"]',english?'Password':'Kata sandi');
+  $('#user-login-form input[type="password"]').placeholder=english?'Enter your password':'Masukkan kata sandi';
+  $('#user-login-form .forgot-password-link').textContent=english?'Forgot password?':'Lupa kata sandi?';
+  setLeadingCopy('#user-login-form .primary-button',english?'Sign In & Connect':'Masuk & Sambungkan');
+  $('#back-from-user-login').textContent=english?'← Back to sign in':'← Kembali ke halaman login';
+  const recovery=$('#forgot-password-screen .login-card');
+  recovery.querySelector('.eyebrow').textContent=english?'Account recovery':'Pemulihan akun';
+  recovery.querySelector('h2').textContent=english?'Forgot your password?':'Lupa kata sandi?';
+  recovery.querySelector(':scope > p').textContent=english?'Enter your account email. We will send you a link to create a new password.':'Masukkan email akun Anda. Kami akan mengirim tautan untuk membuat kata sandi baru.';
+  setLeadingCopy('#forgot-password-form .primary-button',english?'Send Reset Link':'Kirim Tautan Reset');
+  $('#back-from-forgot-password').textContent=english?'← Back':'← Kembali';
+  $('#verify-screen .eyebrow').textContent=english?'Verification required':'Verifikasi diperlukan';
+  $('#verify-title').textContent=english?'Check your email.':'Cek email Anda.';
+  $('#verify-screen .success-card > p').innerHTML=english?'We sent a verification link to <b id="verification-email">your email</b>. Open it to activate High Speed access.':'Kami telah mengirim tautan verifikasi ke <b id="verification-email">email Anda</b>. Klik tautan tersebut untuk mengaktifkan akses High Speed.';
+  $('#verify-screen .connected-to small').textContent=english?'Registration status':'Status pendaftaran';
+  $('#verify-screen .connected-to b').textContent=english?'Waiting for email verification':'Menunggu verifikasi email';
+  setLeadingCopy('#resend-verification',english?'Resend Email':'Kirim Ulang Email');
+  $('#back-from-verify').textContent=english?'Back to access options':'Kembali ke pilihan akses';
+}
+function applyFreeLanguage(language='id') {
+  const english=language==='en';
+  document.documentElement.lang=english?'en':'id';
+  $('.free-visual-copy .eyebrow').textContent=english?'PerumNet Free WiFi':'PerumNet Free WiFi';
+  $('.free-visual-copy h1').innerHTML=english?'Free internet.<br><em>Just one click.</em>':'Internet gratis.<br><em>Satu klik saja.</em>';
+  $('.free-visual-copy p').textContent=english?'Connect quickly without filling out a form. Free access is provided on a dedicated network with an adjusted speed.':'Terhubung cepat tanpa formulir. Akses gratis disediakan pada jaringan khusus dengan kecepatan yang sudah disesuaikan.';
+  $('.free-visual-status b').textContent=english?'No personal details':'Tanpa isi data';
+  $('.free-visual-status small').textContent=english?'Your privacy stays protected':'Privasi tetap terjaga';
+  setLeadingCopy('#free-screen .form-topline',english?'You are connected to':'Anda terhubung ke');
+  const benefits=$$('#free-screen .free-benefits > div');
+  if(benefits.length===3){
+    benefits[0].querySelector('small').textContent=english?'Access cost':'Biaya akses'; benefits[0].querySelector('b').textContent=english?'Free':'Gratis';
+    benefits[1].querySelector('small').textContent=english?'Session duration':'Durasi sesi';
+    benefits[2].querySelector('small').textContent=english?'Network profile':'Profil jaringan';
+  }
+  const duration=Number(portalSettings.limited_session_hours || 2);
+  $('#free-duration').textContent=english?`${duration} hours`:`${duration} jam`;
+  $('#free-screen .free-terms').textContent=english?'By continuing, you agree to the PerumNet network terms of use.':'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan PerumNet.';
+}
 function renderPublicPortalContent() {
   const profiles=normalizedPortalProfiles(portalSettings);
   const account=profiles.account,free=profiles.free;
@@ -186,6 +307,8 @@ function renderPublicPortalContent() {
   $('#free-title').textContent=free.headline;
   $('#free-intro').textContent=free.description;
   $('#free-connect .button-label').textContent=free.primary_button_label;
+  if(isFreeView) applyFreeLanguage(free.language);
+  else if(!isAdminView && !isGatewayReviewView) applyAccountLanguage(account.language);
   for(const [hostId,profile] of [['account-portal-extras',account],['free-portal-extras',free]]){
     const host=$(`#${hostId}`); host.replaceChildren(...createPortalExtras(profile).childNodes);
     host.hidden=!host.childElementCount;
@@ -202,7 +325,7 @@ function syncPortalEditorForm() {
   const form=$('#portal-content-form');
   if(!form) return;
   const profile=portalEditorState.profiles[portalEditorState.activeProfile];
-  ['ssid','eyebrow','headline','description','primary_button_label','announcement_tone','announcement_title','announcement_text','announcement_link_label','announcement_link_url'].forEach(name=>{
+  ['ssid','language','eyebrow','headline','description','primary_button_label','announcement_tone','announcement_title','announcement_text','announcement_link_label','announcement_link_url'].forEach(name=>{
     const field=form.elements[name]; if(field) field.value=profile[name] || '';
   });
   form.elements.announcement_enabled.checked=!!profile.announcement_enabled;
@@ -298,6 +421,7 @@ let networkCatalog = { projects:[], gateways:[], portalNetworks:[], blockedGatew
 const adminScope = { projectId:'', gatewayId:'' };
 const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
 const adminMonitoring = { range:'24h', loading:false };
+const adminReport = { period:'weekly',loading:false,data:null };
 const adminUsers = { page:1, limit:10, verification:'all', search:'', total:0, totalPages:1 };
 const registeredUsers = [];
 let leadsLoading = false;
@@ -328,7 +452,19 @@ function closeForgotPassword() { forgotPasswordReturn === 'userLogin' ? showUser
 function showAccountStatus(title, message, success=true) { $('#account-status-title').textContent=title; $('#account-status-message').textContent=message; $('#account-status-eyebrow').textContent=success ? 'Akun berhasil diperbarui' : 'Tautan tidak dapat diproses'; $('#account-status-icon').textContent=success ? '✓' : '!'; $('#account-status-icon').classList.toggle('error',!success); show('accountStatus'); }
 function clearAccountActionUrl() { history.replaceState({},'',location.pathname); }
 function startDestinationRedirect() { clearInterval(redirectTimer); let seconds=3; $('#redirect-countdown').textContent=seconds; redirectTimer=setInterval(()=>{ seconds-=1; $('#redirect-countdown').textContent=Math.max(seconds,0); if (seconds <= 0) { clearInterval(redirectTimer); location.assign(destinationUrl); } },1000); }
-function connectToWifi(withLead) { $('#success-message').textContent = withLead ? 'Akun Anda sudah aktif dan akses internet berhasil tersambung.' : 'Akses internet Anda sudah aktif. Selamat menggunakan WiFi gratis PerumNet.'; show('success'); startDestinationRedirect(); }
+function connectToWifi(withLead) {
+  const profile=normalizedPortalProfiles(portalSettings)[withLead?'account':'free'];
+  const english=profile.language==='en';
+  $('#success-screen .eyebrow').textContent=english?'Connected successfully':'Berhasil terhubung';
+  $('#success-title').innerHTML=english?'Enjoy your<br>internet access!':'Selamat menikmati<br>WiFi gratis!';
+  $('#success-message').textContent=english
+    ? (withLead?'Your account is active and your internet connection is ready.':'Your internet access is active. Enjoy PerumNet Free WiFi.')
+    : (withLead?'Akun Anda sudah aktif dan akses internet berhasil tersambung.':'Akses internet Anda sudah aktif. Selamat menggunakan WiFi gratis PerumNet.');
+  $('#success-screen .connected-to small').textContent=english?'Connected to network':'Terhubung ke jaringan';
+  $('#success-screen .redirect-status p').innerHTML=english?'Opening PerumNet in <b id="redirect-countdown">3</b> seconds…':'Menuju PerumNet dalam <b id="redirect-countdown">3</b> detik…';
+  setLeadingCopy('#browse-button',english?'Open PerumNet Now':'Buka PerumNet Sekarang');
+  show('success'); startDestinationRedirect();
+}
 const isConnectedCallback = new URLSearchParams(location.search).get('connected') === '1';
 if (isGatewayReviewView) {
   const gatewayStatus=pageParams.get('status');
@@ -384,7 +520,7 @@ async function refreshAdminData() {
   updateAdminRefreshStatus('loading');
   adminRefreshPromise=(async()=>{
     await loadAdminNetwork();
-    const results=await Promise.allSettled([loadAdminLeads(),loadAdminMonitoring(),loadAdminUsers(),loadNotifications()]);
+    const results=await Promise.allSettled([loadAdminLeads(),loadAdminMonitoring(),loadAdminReport(),loadAdminUsers(),loadNotifications()]);
     const rejected=results.find(result=>result.status==='rejected');
     if(rejected) throw rejected.reason;
     updateAdminRefreshStatus('live');
@@ -533,6 +669,43 @@ async function loadAdminMonitoring({ silent=false }={}) {
   catch(error){ updateMonitoringStatus('error'); if(!silent) throw error; }
   finally { adminMonitoring.loading=false; }
 }
+function renderReportDailyChart(targetId,rows=[],field='total_bytes',formatter=formatBytes) {
+  const target=$(`#${targetId}`);
+  const max=Math.max(1,...rows.map(row=>Number(row[field]||0)));
+  if(!rows.length){ target.innerHTML='<div class="chart-empty">Belum ada data pada periode ini.</div>'; return; }
+  target.innerHTML=rows.map((row,index)=>{
+    const value=Number(row[field]||0),height=value?Math.max(4,(value/max)*100):0;
+    const showLabel=rows.length<=10 || index%Math.ceil(rows.length/8)===0;
+    const label=new Date(`${row.day}T00:00:00Z`).toLocaleDateString('id-ID',{ day:'2-digit',month:'short' });
+    const title=`${label}: ${formatter(value)}`;
+    return `<div class="report-day" title="${escapeHtml(title)}"><div class="report-bar-track"><i style="height:${height.toFixed(2)}%"></i></div><b>${showLabel?escapeHtml(label):''}</b><small>${showLabel?escapeHtml(formatter(value)):''}</small></div>`;
+  }).join('');
+}
+function renderAdminReport(result) {
+  adminReport.data=result;
+  const summary=result.summary||{};
+  $('#report-total-usage').textContent=formatBytes(summary.total_bytes);
+  $('#report-usage-split').textContent=`↓ ${formatBytes(summary.incoming_bytes)} · ↑ ${formatBytes(summary.outgoing_bytes)}`;
+  $('#report-total-duration').textContent=formatDuration(summary.session_seconds);
+  $('#report-session-split').textContent=`${summary.account_sessions||0} sesi akun · ${summary.free_sessions||0} sesi free`;
+  $('#report-session-count').textContent=Number(summary.session_count||0).toLocaleString('id-ID');
+  $('#report-scope-label').textContent=result.scope;
+  $('#report-gateway-count').textContent=summary.gateway_count||0;
+  $('#report-period-label').textContent=result.range_label;
+  $('#report-generated-at').textContent=`Diperbarui ${new Date(result.generated_at).toLocaleTimeString('id-ID',{ hour:'2-digit',minute:'2-digit' })}`;
+  $('#report-range-copy').textContent=`${new Date(result.start_at).toLocaleDateString('id-ID',{ dateStyle:'medium' })} – ${new Date(result.end_at).toLocaleDateString('id-ID',{ dateStyle:'medium' })}`;
+  renderReportDailyChart('report-usage-chart',result.daily,'total_bytes',formatBytes);
+  renderReportDailyChart('report-duration-chart',result.daily,'session_seconds',formatDuration);
+  $('#report-gateway-list').innerHTML=(result.gateways||[]).map(gateway=>`<article><div><b>${escapeHtml(gateway.name)}</b><small>${escapeHtml(gateway.project_name || gateway.id)}</small></div><span><small>Data</small><b>${escapeHtml(formatBytes(gateway.total_bytes))}</b></span><span><small>Durasi</small><b>${escapeHtml(formatDuration(gateway.session_seconds))}</b></span><span><small>Sesi</small><b>${Number(gateway.session_count||0).toLocaleString('id-ID')}</b></span><span><small>Perangkat</small><b>${Number(gateway.devices||0).toLocaleString('id-ID')}</b></span></article>`).join('') || '<div class="chart-empty compact">Belum ada gateway pada scope ini.</div>';
+}
+async function loadAdminReport({ silent=false }={}) {
+  if(!isAdminView || adminReport.loading) return;
+  adminReport.loading=true;
+  $('#network-report-panel')?.classList.add('loading');
+  try { renderAdminReport(await api(`/api/admin/reports${scopeQuery({ period:adminReport.period })}`)); }
+  catch(error){ if(!silent) throw error; }
+  finally { adminReport.loading=false; $('#network-report-panel')?.classList.remove('loading'); }
+}
 function updateMonitoringStatus(state='live') {
   const status=$('#monitoring-status'); if(!status) return;
   status.classList.toggle('error',state==='error');
@@ -560,7 +733,7 @@ async function loadAdminLeads({ silent=false }={}) {
     $('#total-leads').textContent = stats.total;
     $('#today-leads').textContent = stats.today;
     $('#authorized-leads').textContent = stats.authorized;
-    ['all','account','free','pending'].forEach(key=>{ $(`#category-count-${key}`).textContent=categories[key] || 0; });
+    ['all','online','account','free','pending'].forEach(key=>{ $(`#category-count-${key}`).textContent=categories[key] || 0; });
     renderLeads(); updateMonitoringStatus('live'); updateTableRefreshStatus('live'); updateAdminRefreshStatus('live');
   } catch(error) {
     updateMonitoringStatus('error');
@@ -678,7 +851,7 @@ function renderGatewayCards() {
 function renderBlockedGateways() {
   const blocked=networkCatalog.blockedGateways || [];
   $('#blocked-gateway-section').hidden=!blocked.length;
-  $('#blocked-gateway-list').innerHTML=blocked.map(gateway=>`<article class="blocked-gateway-item"><div><b>${escapeHtml(gateway.gateway_id)}</b><span>Diblokir ${escapeHtml(relativeTime(gateway.blocked_at))}</span></div><button type="button" class="unblock-gateway" data-gateway-id="${escapeHtml(gateway.gateway_id)}">Buka blokir</button></article>`).join('');
+  $('#blocked-gateway-list').innerHTML=blocked.map(gateway=>`<article class="blocked-gateway-item"><div><b>${escapeHtml(gateway.gateway_id)}</b><span>Diblokir ${escapeHtml(relativeTime(gateway.blocked_at))}</span></div><div class="blocked-gateway-actions"><button type="button" class="archive-blocked-gateway" data-gateway-id="${escapeHtml(gateway.gateway_id)}">Hapus dari daftar</button><button type="button" class="unblock-gateway" data-gateway-id="${escapeHtml(gateway.gateway_id)}">Buka blokir</button></div></article>`).join('');
 }
 function renderPortalNetworkRoutes() {
   const routes=networkCatalog.portalNetworks || [];
@@ -720,7 +893,7 @@ function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
   $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab];
   if(updateHash) history.replaceState({},'',tab==='leads' ? '/admin' : `/admin#${tab}`);
   if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message));
-  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true })]);
+  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true }),loadAdminReport({ silent:true })]);
   if(tab==='users') loadAdminUsers({ silent:true });
   if(tab!=='users') closeAdminUserEditor();
   setNotificationPanel(false);
@@ -728,13 +901,13 @@ function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
 }
 renderLeads();
 loadPortalSettings();
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); activateAdminTab(location.hash.slice(1) || 'leads',{ updateHash:false }); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; $('#admin-email').title=`Sesi berakhir ${new Date(session.expiresAt).toLocaleString('id-ID')}`; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadAdminReport(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); activateAdminTab(location.hash.slice(1) || 'leads',{ updateHash:false }); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
 $('#lead-form').addEventListener('submit', async e => { e.preventDefault(); const data = new FormData(e.currentTarget); if (![...data.values()].every(Boolean)) { $('#form-error').textContent = 'Lengkapi semua data, kata sandi, dan setujui syarat terlebih dahulu.'; return; } const button=e.currentTarget.querySelector('button'); button.disabled=true; try { const result = await api('/api/auth/register', { fullName:data.get('name'), email:data.get('email'), phone:data.get('phone'), address:data.get('address'), password:data.get('password'), consent:data.get('consent'), context:captiveContext }); $('#form-error').textContent=''; pendingVerificationEmail=result.email; $('#verification-email').textContent = result.email; show('verify'); } catch (error) { $('#form-error').textContent = error.message; } finally { button.disabled=false; } });
 $('#choose-high-speed').onclick = showLeadForm; $('#back-to-access-choice').onclick = showAccessChoice;
-$('#free-connect').onclick = async event => { const button=event.currentTarget,feedback=$('#free-feedback'),label=button.querySelector('.button-label'); button.disabled=true; feedback.textContent=''; label.textContent='Menghubungkan…'; try { const result=await api('/api/captive/limited',{ context:captiveContext }); handleAuthorization(result,()=>connectToWifi(false)); } catch(error) { feedback.textContent=error.message; button.disabled=false; label.textContent='Sambungkan Internet Gratis'; } };
+$('#free-connect').onclick = async event => { const button=event.currentTarget,feedback=$('#free-feedback'),label=button.querySelector('.button-label'),profile=normalizedPortalProfiles(portalSettings).free,english=profile.language==='en'; button.disabled=true; feedback.textContent=''; label.textContent=english?'Connecting…':'Menghubungkan…'; try { const result=await api('/api/captive/limited',{ context:captiveContext }); handleAuthorization(result,()=>connectToWifi(false)); } catch(error) { feedback.textContent=error.message; button.disabled=false; label.textContent=profile.primary_button_label; } };
 $('#quick-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('button'), feedback=$('#quick-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
 $('#open-user-login').onclick = () => showUserLogin(); $('#back-from-user-login').onclick = showAccessChoice; $('#close-user-login').onclick = showAccessChoice;
 $('#user-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('.primary-button'), feedback=$('#user-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
@@ -755,7 +928,7 @@ async function applyAdminScope(projectId='',gatewayId='') {
   adminTable.page=1;
   renderScopeOptions();
   setWorkspaceMenu(false);
-  await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadNotifications()]);
+  await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadAdminReport(),loadNotifications()]);
 }
 function setSidebar(open) { document.body.classList.toggle('sidebar-open',open); $('#sidebar-toggle').setAttribute('aria-expanded',String(open)); if(!open) setWorkspaceMenu(false); }
 $('#sidebar-toggle').onclick = () => setSidebar(!document.body.classList.contains('sidebar-open')); $('#sidebar-backdrop').onclick = () => setSidebar(false);
@@ -802,9 +975,16 @@ $('#gateway-list').addEventListener('click',async event=>{
   }catch(error){ alert(error.message); deleteButton.disabled=false; }
 });
 $('#blocked-gateway-list').addEventListener('click',async event=>{
-  const button=event.target.closest('.unblock-gateway');
+  const button=event.target.closest('.unblock-gateway,.archive-blocked-gateway');
   if(!button) return;
   const gatewayId=button.dataset.gatewayId;
+  if(button.classList.contains('archive-blocked-gateway')){
+    if(!confirm(`Hapus ${gatewayId} dari daftar gateway diblokir?\n\nCatatan akan hilang dari dashboard, tetapi ID tetap diblokir dan tidak dapat mendaftar ulang.`)) return;
+    button.disabled=true;
+    try{ await api('/api/admin/gateway-blocks/archive',{ gatewayId }); await loadAdminNetwork(); }
+    catch(error){ alert(error.message); button.disabled=false; }
+    return;
+  }
   if(!confirm(`Buka blokir ${gatewayId}?\n\nGateway belum langsung dipercaya. Request berikutnya akan muncul kembali sebagai pending dan tetap harus disetujui admin.`)) return;
   button.disabled=true;
   try{ await api('/api/admin/gateway-blocks',{ gatewayId },'DELETE'); await loadAdminNetwork(); }
@@ -814,6 +994,22 @@ $('#portal-network-list').addEventListener('submit',async event=>{ const form=ev
 $('#search-input').addEventListener('input', event => { clearTimeout(searchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; searchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
 $('#category-filter').addEventListener('click',event=>{ const button=event.target.closest('[data-category]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#category-filter [data-category]').forEach(item=>item.classList.toggle('active',item===button)); adminTable.category=button.dataset.category; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
 $('#monitoring-range').addEventListener('click',event=>{ const button=event.target.closest('[data-range]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#monitoring-range [data-range]').forEach(item=>item.classList.toggle('active',item===button)); adminMonitoring.range=button.dataset.range; loadAdminMonitoring().catch(error=>alert(error.message)); });
+$('#report-period').addEventListener('click',event=>{ const button=event.target.closest('[data-report-period]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#report-period [data-report-period]').forEach(item=>item.classList.toggle('active',item===button)); adminReport.period=button.dataset.reportPeriod; loadAdminReport().catch(error=>alert(error.message)); });
+$('#export-report-pdf').onclick=async event=>{
+  const button=event.currentTarget,old=button.textContent;
+  button.disabled=true; button.textContent='Menyiapkan PDF…';
+  try {
+    const response=await fetch(`/api/admin/reports.pdf${scopeQuery({ period:adminReport.period })}`,{ credentials:'same-origin' });
+    if(response.status===401){ show('login'); throw new Error('Sesi admin telah berakhir. Silakan masuk kembali.'); }
+    if(!response.ok) throw new Error('Laporan PDF tidak dapat dibuat.');
+    const disposition=response.headers.get('content-disposition') || '';
+    const filename=disposition.match(/filename="?([^";]+)"?/i)?.[1] || `laporan-jaringan-perumnet-${adminReport.period}.pdf`;
+    const href=URL.createObjectURL(await response.blob()),anchor=document.createElement('a');
+    anchor.href=href; anchor.download=filename; anchor.click();
+    setTimeout(()=>URL.revokeObjectURL(href),1000);
+  } catch(error) { alert(error.message); }
+  finally { button.disabled=false; button.textContent=old; }
+};
 $('#page-size').addEventListener('change',event=>{ adminTable.limit=Number(event.target.value)||10; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
 $('#page-prev').onclick=()=>{ if(adminTable.page<=1) return; adminTable.page-=1; loadAdminLeads().catch(error=>alert(error.message)); };
 $('#page-next').onclick=()=>{ if(adminTable.page>=adminTable.totalPages) return; adminTable.page+=1; loadAdminLeads().catch(error=>alert(error.message)); };
@@ -884,7 +1080,15 @@ $('#portal-content-form').addEventListener('input',event=>{
   const field=event.target;
   if(field.closest('#portal-promo-list')) return;
   if(field.name && Object.hasOwn(portalEditorState.profiles[portalEditorState.activeProfile],field.name)){
-    portalEditorState.profiles[portalEditorState.activeProfile][field.name]=field.type==='checkbox' ? field.checked:field.value;
+    const profile=portalEditorState.profiles[portalEditorState.activeProfile];
+    if(field.name==='language' && profile.language!==field.value){
+      const previousDefaults=profile.language==='en' ? portalEnglishDefaults[profile.profile]:portalContentDefaults[profile.profile];
+      const nextDefaults=field.value==='en' ? portalEnglishDefaults[profile.profile]:portalContentDefaults[profile.profile];
+      ['eyebrow','headline','description','primary_button_label'].forEach(name=>{ if(profile[name]===previousDefaults[name]) profile[name]=nextDefaults[name]; });
+      profile.language=field.value;
+      syncPortalEditorForm(); setPortalEditorDirty(); return;
+    }
+    profile[field.name]=field.type==='checkbox' ? field.checked:field.value;
     if(field.name==='announcement_enabled') $('.announcement-editor').classList.toggle('enabled',field.checked);
     if(field.name==='description') $('[data-count-for="description"]').textContent=`${field.value.length} / 700`;
     if(field.name==='ssid') {

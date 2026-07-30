@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [html, css, app, favicon] = await Promise.all([
+const [html, css, app, favicon, server] = await Promise.all([
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../styles.css', import.meta.url), 'utf8'),
   readFile(new URL('../app.js', import.meta.url), 'utf8'),
-  readFile(new URL('../assets/perumnet-favicon.png', import.meta.url))
+  readFile(new URL('../assets/perumnet-favicon.png', import.meta.url)),
+  readFile(new URL('../server.mjs', import.meta.url), 'utf8')
 ]);
 
 assert.match(html, /id="success-screen" class="success-page portal-modal"/, 'Status koneksi harus memakai modal.');
@@ -33,6 +34,7 @@ assert.match(html, /id="admin-refresh"[^>]*aria-label="Refresh seluruh data admi
 assert.match(html, /id="notification-panel"/, 'Dashboard harus menyediakan panel aktivitas pelanggan.');
 assert.match(html, /id="table-refresh"[^>]*aria-busy="false"/, 'Tabel perangkat harus memiliki refresh manual sendiri.');
 assert.match(html, /id="category-filter"/, 'Dashboard harus memisahkan kategori pengguna terdaftar, Free, dan belum login.');
+assert.match(html, /data-category="online"[\s\S]*id="category-count-online"/, 'Dashboard harus menyediakan filter khusus perangkat yang sedang online.');
 assert.match(html, /id="page-size"[^>]*><option value="10" selected>10<\/option><option value="25">25<\/option><option value="50">50<\/option><option value="100">100<\/option>/, 'Tabel harus menyediakan pilihan 10 sampai 100 data per halaman.');
 assert.match(html, /id="monitoring-status"/, 'Dashboard harus menampilkan status monitoring real-time.');
 assert.match(html, /id="analytics-panel"/, 'Dashboard harus menampilkan panel grafik di atas tabel perangkat.');
@@ -40,6 +42,9 @@ assert.match(html, /id="global-traffic-chart"/, 'Dashboard harus menyediakan gra
 assert.match(html, /id="ssid-usage-chart"/, 'Dashboard harus menyediakan grafik penggunaan setiap SSID.');
 assert.match(html, /id="user-usage-chart"/, 'Dashboard harus menyediakan grafik penggunaan per pengguna.');
 assert.match(html, /id="monitoring-range"[\s\S]*data-range="1h"[\s\S]*data-range="7d"/, 'Grafik harus menyediakan pilihan periode 1 jam hingga 7 hari.');
+assert.match(html, /id="network-report-panel"/, 'Dashboard harus menyediakan laporan historis penggunaan dan durasi sesi.');
+assert.match(html, /id="report-period"[\s\S]*data-report-period="weekly"[\s\S]*data-report-period="monthly"/, 'Laporan harus dapat dipilih mingguan atau bulanan.');
+assert.match(html, /id="export-report-pdf"/, 'Laporan historis harus dapat diekspor ke PDF.');
 assert.match(html, /Bandwidth Saat Ini/, 'Tabel admin harus menampilkan bandwidth setiap pengguna.');
 assert.match(html, /Durasi Login/, 'Tabel admin harus menampilkan durasi login.');
 assert.match(html, /Data Terpakai/, 'Tabel admin harus menampilkan total penggunaan data.');
@@ -77,7 +82,7 @@ assert.match(app, /context\.wlan_name,context\.ssid_name,context\.essid,context\
 assert.match(app, /\/api\/admin\/notifications/, 'Dashboard harus memuat notifikasi pelanggan dari server.');
 assert.match(app, /setInterval\(\(\) => loadNotifications/, 'Dashboard harus memperbarui notifikasi secara berkala.');
 assert.match(app, /setInterval\(\(\)=>\{[\s\S]*loadAdminLeads\(\{ silent:true \}\)[\s\S]*\},5000\)/, 'Monitoring client harus diperbarui otomatis setiap lima detik.');
-assert.match(app, /async function refreshAdminData\(\)[\s\S]*loadAdminNetwork\(\)[\s\S]*Promise\.allSettled\(\[loadAdminLeads\(\),loadAdminMonitoring\(\),loadAdminUsers\(\),loadNotifications\(\)\]\)/, 'Refresh global harus menyinkronkan jaringan, tabel, database pengguna, grafik, dan notifikasi.');
+assert.match(app, /async function refreshAdminData\(\)[\s\S]*loadAdminNetwork\(\)[\s\S]*Promise\.allSettled\(\[loadAdminLeads\(\),loadAdminMonitoring\(\),loadAdminReport\(\),loadAdminUsers\(\),loadNotifications\(\)\]\)/, 'Refresh global harus menyinkronkan jaringan, tabel, database pengguna, laporan, grafik, dan notifikasi.');
 assert.match(app, /async function refreshTableData\(\)[\s\S]*tableRefreshPromise=loadAdminLeads\(\)/, 'Refresh tabel harus memperbarui data klien tanpa memuat ulang halaman.');
 assert.match(app, /function mountAdminUsersPage\(\)/, 'UI harus membangun halaman CRUD pengguna dalam session admin yang sama.');
 assert.match(app, /function mountPortalContentStudio\(\)/, 'Pengaturan Portal harus memiliki editor konten dinamis.');
@@ -96,6 +101,11 @@ assert.match(app, /\/api\/admin\/monitoring/, 'Dashboard harus membaca agregasi 
 assert.match(app, /renderGlobalTrafficChart/, 'UI harus merender grafik gabungan tanpa library eksternal.');
 assert.match(app, /renderSsidUsageChart/, 'UI harus merender distribusi per SSID.');
 assert.match(app, /renderUserUsageChart/, 'UI harus merender penggunaan per pengguna.');
+assert.match(app, /\/api\/admin\/reports/, 'Dashboard harus membaca agregasi laporan historis dari server.');
+assert.match(app, /\/api\/admin\/reports\.pdf/, 'Ekspor laporan harus memakai PDF yang dibuat server.');
+assert.match(app, /name="language"[\s\S]*Bahasa Indonesia[\s\S]*English/, 'Setiap profil portal harus memiliki pilihan Bahasa Indonesia atau English.');
+assert.match(app, /function applyAccountLanguage\(language='id'\)/, 'Portal akun harus dapat menerapkan salinan antarmuka bahasa Inggris.');
+assert.match(app, /function applyFreeLanguage\(language='id'\)/, 'Portal free harus dapat menerapkan salinan antarmuka bahasa Inggris.');
 assert.match(app, /category:'all'.*totalPages:1/, 'UI harus menyimpan state pagination dan kategori tabel.');
 assert.match(app, /gatewayId:lead\.gatewayId,macAddress:lead\.mac/, 'Hapus client harus dibatasi pada gateway yang tepat.');
 assert.match(app, /\/api\/admin\/network/, 'UI harus membaca struktur project dan gateway dari database.');
@@ -105,12 +115,15 @@ assert.match(app, /networkDescription=data\.get\('networkDescription'\)/, 'Deskr
 assert.match(app, /\/api\/admin\/portal-networks/, 'Admin harus dapat menyimpan routing portal per gateway.');
 assert.match(app, /\/api\/admin\/gateways\/approval/, 'Admin harus dapat menyetujui gateway secara eksplisit.');
 assert.match(app, /\/api\/admin\/gateway-blocks/, 'Admin harus dapat membuka blokir gateway dengan aman.');
+assert.match(app, /\/api\/admin\/gateway-blocks\/archive/, 'Admin harus dapat menghapus catatan gateway yang tetap diblokir dari dashboard.');
 assert.match(app, /api\('\/api\/admin\/gateways',\{ gatewayId \},'DELETE'\)/, 'Admin harus dapat menghapus dan memblokir gateway.');
 assert.match(app, /function renderWorkspaceMenu\(\)/, 'UI harus merender pilihan project dan gateway di sidebar.');
 assert.match(app, /async function applyAdminScope\(projectId='',gatewayId=''\)/, 'Dropdown sidebar dan filter utama harus memakai scope dashboard yang sama.');
 assert.match(app, /workspace-option/, 'UI harus menangani pilihan workspace dari menu sidebar.');
 assert.match(app, /\/api\/auth\/forgot-password/, 'UI harus dapat meminta email reset kata sandi.');
 assert.match(app, /\/api\/auth\/reset-password/, 'UI harus dapat menyimpan kata sandi baru.');
+assert.match(server, /SMTP_TLS_SERVERNAME/, 'SMTP melalui jaringan privat harus tetap memverifikasi hostname sertifikat provider.');
+assert.match(server, /tls:config\.smtpTlsServername/, 'Transport email harus menerapkan hostname TLS yang dikonfigurasi.');
 assert.match(app, /showAccountStatus\('Email berhasil diverifikasi\.','Kembali ke jendela login WiFi/, 'Verifikasi email tidak boleh mengarahkan user ke form hotspot.');
 assert.match(css, /body\.admin-view \.sidebar \.sidebar-brand[^}]*background:transparent/, 'Logo admin harus menyatu dengan sidebar.');
 assert.match(css, /@media\(max-width:760px\)/, 'Dashboard harus memiliki breakpoint kartu mobile.');
@@ -125,6 +138,9 @@ assert.match(css, /\.blocked-gateway-item/, 'Daftar blokir gateway harus respons
 assert.match(css, /\.portal-profile-grid/, 'Profil portal admin harus memiliki layout responsif khusus.');
 assert.match(css, /\.portal-content-studio/, 'Editor konten portal harus memiliki layout admin yang terstruktur.');
 assert.match(css, /\.portal-announcement/, 'Pengumuman dinamis harus memiliki tampilan client yang jelas.');
+assert.match(app, /role="switch"[^>]*aria-label="Tampilkan pengumuman di halaman portal"/, 'Toggle pengumuman harus menggunakan kontrol switch yang aksesibel.');
+assert.match(css, /\.editor-switch-copy/, 'Toggle pengumuman harus menampilkan status yang jelas.');
+assert.match(css, /\.switch-status-on/, 'Toggle pengumuman harus membedakan status aktif dan nonaktif.');
 assert.match(css, /\.portal-promotion-strip/, 'Promo client harus responsif dan dapat digulir tanpa overflow halaman.');
 assert.match(css, /@media\(max-width:760px\)\{\.content-studio-header/, 'Editor portal harus memiliki layout mobile khusus.');
 const desktopGatewayTableWidth = css.lastIndexOf('body.admin-view table{min-width:1880px}');
@@ -133,6 +149,8 @@ const finalMobileTableReset = css.lastIndexOf('body.admin-view table{min-width:0
 assert.ok(Math.max(mobileGatewayTableReset,finalMobileTableReset) > desktopGatewayTableWidth, 'Aturan mobile harus membatalkan lebar minimum tabel monitoring.');
 assert.match(css, /body\.admin-view \.stats\{grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/, 'Statistik mobile harus tampil tanpa carousel horizontal yang terpotong.');
 assert.match(css, /\.analytics-grid/, 'Panel monitoring harus memiliki layout grafik responsif.');
+assert.match(css, /\.network-report-card/, 'Laporan historis harus memiliki kartu responsif sendiri.');
+assert.match(css, /body\.admin-view \.network-report-card\{width:100%;min-width:0;max-width:100%/, 'Kartu laporan tidak boleh melebihi viewport mobile.');
 assert.match(css, /\.workspace-switcher\.open \.workspace-menu/, 'Menu workspace harus memiliki state buka yang jelas.');
 assert.match(css, /\.workspace-option\.active/, 'Project atau gateway terpilih harus memiliki state visual aktif.');
 assert.match(css, /body\.admin-view \.analytics-card\{width:100%;min-width:0;max-width:100%/, 'Panel grafik mobile harus dibatasi pada lebar viewport.');

@@ -6,14 +6,14 @@ Jalankan aplikasi:
 npm run dev
 ```
 
-Portal tersedia di `http://localhost:3000`. Saat deployment, gunakan `https://hotspot.perumnet.id` sebagai `APP_BASE_URL`. SQLite dibuat otomatis di `data/portal.db`; email verifikasi development dicatat di `data/email-outbox.ndjson`.
+Portal tersedia di `http://localhost:3000`. Saat deployment, gunakan `https://hotspot.perumnet.com` sebagai `APP_BASE_URL`. SQLite dibuat otomatis di `data/portal.db`; email verifikasi development dicatat di `data/email-outbox.ndjson`.
 
 ## Integrasi Ruijie Reyee EG
 
-Konfigurasikan gateway sebagai **Third-party Authentication**. Portal dibagi berdasarkan profil jaringan:
+Konfigurasikan gateway sebagai **Third-party Authentication** dengan satu `Auth Server URL` `https://hotspot.perumnet.com`. Portal memilih halaman secara dinamis berdasarkan routing VLAN pada setiap gateway:
 
-- VLAN/SSID akun High Speed `@PERUMNET_WiFi` menggunakan `Auth Server URL` `https://hotspot.perumnet.id`.
-- VLAN/SSID gratis `@PERUMNET_FreeWiFi` dengan QoS Limited menggunakan `Auth Server URL` `https://hotspot.perumnet.id/free`.
+- VLAN/SSID akun High Speed `@PERUMNET_WiFi` diarahkan ke portal login/daftar utama.
+- VLAN/SSID gratis `@PERUMNET_FreeWiFi` dengan QoS Limited diarahkan otomatis ke halaman `/free`.
 
 Jalur `/free` hanya menampilkan tombol One Click tanpa formulir. Server juga menerima callback WiFiDog dengan prefix `/free/auth/wifidogAuth/...` dan mengembalikan pengguna Limited ke `/free?connected=1` setelah gateway mengonfirmasi token. Tambahkan parameter context gateway seperti `client_mac`, `client_ip`, `ssid`, `orig_url`, dan terutama `login_url`.
 
@@ -25,14 +25,20 @@ Dashboard admin membaca callback WiFiDog `stage=counters` (`incoming` dan `outgo
 
 Setiap callback counter juga disimpan sebagai histori selama 30 hari. Panel grafik admin menyediakan periode 1 jam, 6 jam, 24 jam, dan 7 hari untuk melihat bandwidth gabungan, distribusi penggunaan setiap SSID, serta pengguna dengan trafik tertinggi. Semua grafik mengikuti filter project/gateway yang aktif dan diperbarui otomatis setiap 10 detik.
 
-Daftar perangkat memakai pagination server dengan 10 baris sebagai default dan pilihan 25, 50, atau 100 baris. Filter kategori memisahkan **Pengguna Terdaftar**, **Free / Limited**, dan **Belum Login**. Ekspor CSV dibuat langsung dari data akun terdaftar; perangkat Free/Limited dan perangkat yang belum login tidak pernah dimasukkan ke file.
+Daftar perangkat memakai pagination server dengan 10 baris sebagai default dan pilihan 25, 50, atau 100 baris. Filter kategori memisahkan **Online Sekarang**, **Pengguna Terdaftar**, **Free / Limited**, dan **Belum Login**. Ekspor CSV dibuat langsung dari data akun terdaftar; perangkat Free/Limited dan perangkat yang belum login tidak pernah dimasukkan ke file.
+
+Panel laporan historis menyediakan ringkasan mingguan (7 hari) dan bulanan (30 hari) untuk seluruh gateway, satu project, atau satu gateway. Laporan menggabungkan data terpakai, durasi login, jumlah sesi, serta ringkasan per gateway dan dapat diekspor sebagai PDF A4 beridentitas PerumNet.
+
+Bahasa Portal Akun dan Portal Free dapat diatur secara independen ke Bahasa Indonesia atau English melalui **Pengaturan Portal**. Sesi dashboard admin berlaku tiga jam secara default dan dapat disesuaikan melalui `ADMIN_SESSION_HOURS`.
 
 ## Multi-project dan multi-gateway
 
 Setiap nilai `gw_id` yang diterima dari Ruijie otomatis dibuat sebagai gateway di dashboard. Admin dapat mengelompokkan gateway ke beberapa project, mengisi nama, lokasi, dan model, lalu memfilter data perangkat serta notifikasi per project atau per gateway. Satu MAC yang berpindah gateway disimpan sebagai dua konteks perangkat terpisah sehingga status dan pencabutan akses tidak saling menimpa.
 
+Gateway yang dihapus masuk ke daftar blokir agar ID yang sama tidak dapat mendaftar kembali. Admin dapat membuka blokir untuk mengembalikannya sebagai gateway pending, atau menghapus catatannya dari tampilan dashboard sambil mempertahankan status blokir.
+
 Database versi lama dimigrasikan otomatis saat aplikasi pertama kali dijalankan. Sebelum upgrade produksi, tetap buat salinan `data/portal.db`; deployment VPS pada project ini melakukan backup tersebut sebelum proses PM2 direstart.
 
-Untuk deployment, gunakan HTTPS publik, set `APP_BASE_URL`, ganti semua credential default, lalu isi konfigurasi `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, dan `EMAIL_FROM` untuk email verifikasi.
+Untuk deployment, gunakan HTTPS publik, set `APP_BASE_URL`, ganti semua credential default, lalu isi konfigurasi `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`, dan `EMAIL_REPLY_TO` untuk email verifikasi. Gunakan mailbox serta app password khusus `no-reply@perumnet.id`, lalu arahkan balasan ke `it@perumnet.id`. Jika aplikasi menghubungi mail server melalui IP privat atau Tailscale, isi `SMTP_TLS_SERVERNAME` dengan hostname pada sertifikat TLS (misalnya `mail.perumnet.id`).
 
 Tautan lupa kata sandi memakai SMTP yang sama, hanya dapat digunakan satu kali, dan berlaku 30 menit. Durasi ini dapat diubah melalui `PASSWORD_RESET_MINUTES`.

@@ -13,6 +13,7 @@ const child = spawn(process.execPath, ['server.mjs'], {
     PORT:String(port), APP_BASE_URL:baseUrl, PORTAL_DATA_DIR:dataDir,
     REYEE_AUTH_MODE:'redirect', NODE_ENV:'test',
     WIFIDOG_LIMITED_SESSION_HOURS:'0.0005',
+    ADMIN_SESSION_HOURS:'3',
     ADMIN_EMAIL:'admin-test@example.com', ADMIN_PASSWORD:'admin-test-password',
     SMTP_HOST:'', SMTP_USER:'', SMTP_PASSWORD:'', EMAIL_FROM:''
   },
@@ -43,6 +44,11 @@ try {
   });
   const adminCookie = adminLogin.headers.get('set-cookie');
   assert(adminLogin.status === 200 && adminCookie, 'Admin tes harus dapat login.');
+  assert(/Max-Age=10800/.test(adminCookie), 'Cookie admin harus berakhir tepat setelah tiga jam.');
+  const adminSessionResponse = await fetch(`${baseUrl}/api/admin/session`, { headers:{ cookie:adminCookie } });
+  const adminSession = await adminSessionResponse.json();
+  const remainingAdminHours = (new Date(adminSession.expiresAt).getTime() - Date.now()) / 3_600_000;
+  assert(adminSessionResponse.status === 200 && adminSession.sessionHours === 3 && remainingAdminHours > 2.95 && remainingAdminHours <= 3, 'API session admin harus mengumumkan masa aktif tiga jam.');
   const discoveredNetworkResponse = await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } });
   const discoveredNetwork = await discoveredNetworkResponse.json();
   assert(discoveredNetwork.portalNetworks.some(route=>route.gateway_id==='test-gateway' && route.network_alias==='VLAN10' && route.portal_mode==='account'), 'Redirect WiFiDog harus menemukan alias VLAN dengan fallback Portal Akun.');
@@ -204,8 +210,8 @@ try {
     method:'POST', headers:{ 'content-type':'application/json',cookie:adminCookie },
     body:JSON.stringify({
       profiles:{
-        account:{ ssid:'@PERUMNET_WiFi',eyebrow:'Akses member',headline:'Internet cepat untuk pelanggan.',description:'Login dengan akun PerumNet terverifikasi.',primary_button_label:'Masuk sekarang',announcement_enabled:true,announcement_tone:'info',announcement_title:'Informasi Portal Akun',announcement_text:'Pengumuman ini hanya tampil di jaringan akun.',announcement_link_label:'Baca info',announcement_link_url:'https://perumnet.id' },
-        free:{ ssid:'@PERUMNET_FreeWiFi',eyebrow:'Akses gratis',headline:'Gratis dalam satu klik.',description:'Tanpa akun dan tanpa formulir.',primary_button_label:'Hubungkan Gratis',announcement_enabled:true,announcement_tone:'promo',announcement_title:'Promo Portal Free',announcement_text:'Promo ini hanya tampil di jaringan free.',announcement_link_label:'Lihat promo',announcement_link_url:'https://perumnet.id/promo' }
+        account:{ language:'en',ssid:'@PERUMNET_WiFi',eyebrow:'Member access',headline:'Fast internet for customers.',description:'Sign in with a verified PerumNet account.',primary_button_label:'Sign In',announcement_enabled:true,announcement_tone:'info',announcement_title:'Account Portal Information',announcement_text:'This announcement only appears on the account network.',announcement_link_label:'Read more',announcement_link_url:'https://perumnet.id' },
+        free:{ language:'en',ssid:'@PERUMNET_FreeWiFi',eyebrow:'Free access',headline:'Free in one click.',description:'No account and no form required.',primary_button_label:'Connect for Free',announcement_enabled:true,announcement_tone:'promo',announcement_title:'Free Portal Promotion',announcement_text:'This promotion only appears on the free network.',announcement_link_label:'View promotion',announcement_link_url:'https://perumnet.id/promo' }
       },
       promotions:[
         { id:'promo-account-001',profile:'account',title:'Promo Member',description:'Khusus pengguna terdaftar.',image_url:uploadedImage.url,link_label:'Lihat',link_url:'https://perumnet.id',is_active:true },
@@ -217,7 +223,8 @@ try {
   });
   assert(portalContentUpdate.status === 200, 'Admin harus dapat menerbitkan konten dinamis untuk kedua portal.');
   const dynamicPortalSettings = await (await fetch(`${baseUrl}/api/settings`)).json();
-  assert(dynamicPortalSettings.profiles.account.headline === 'Internet cepat untuk pelanggan.' && dynamicPortalSettings.profiles.free.headline === 'Gratis dalam satu klik.', 'Judul account dan free harus tersimpan independen.');
+  assert(dynamicPortalSettings.profiles.account.headline === 'Fast internet for customers.' && dynamicPortalSettings.profiles.free.headline === 'Free in one click.', 'Judul account dan free harus tersimpan independen.');
+  assert(dynamicPortalSettings.profiles.account.language === 'en' && dynamicPortalSettings.profiles.free.language === 'en', 'Pilihan English harus tersimpan independen untuk kedua profil portal.');
   assert(dynamicPortalSettings.profiles.account.promotions[0].title === 'Promo Member' && dynamicPortalSettings.profiles.free.promotions[0].title === 'Promo Gratis', 'Promo harus dikelompokkan sesuai profil SSID.');
   assert(dynamicPortalSettings.promotions.some(item=>item.title==='Draft Promo' && item.is_active===false) && !dynamicPortalSettings.profiles.free.promotions.some(item=>item.title==='Draft Promo'), 'Promo nonaktif harus tetap dapat diedit admin tanpa tampil pada Portal Free.');
   assert(dynamicPortalSettings.profiles.account.announcement_title !== dynamicPortalSettings.profiles.free.announcement_title, 'Pengumuman kedua portal tidak boleh saling menimpa.');
@@ -286,6 +293,7 @@ try {
   const clientList = await clientsBeforeDelete.json();
   assert(clientList.pagination.limit === 10 && clientList.pagination.page === 1 && clientList.pagination.total >= 3, 'Daftar perangkat harus memakai pagination server dengan default 10 baris.');
   assert(clientList.categories.account === 1 && clientList.categories.free >= 2, 'Dashboard harus memisahkan pengguna terdaftar dan Free/Limited.');
+  assert(clientList.categories.online >= 1, 'Dashboard harus menghitung perangkat yang masih online.');
   assert(clientList.clients.filter(client=>client.mac_address===mac).length === 2, 'Satu MAC pada dua gateway tidak boleh saling menimpa.');
   assert(clientList.clients.some(client=>client.gateway_id==='test-gateway' && client.mac_address===mac && client.ssid==='@PERUMNET_FreeWiFi'), 'Alias VLAN client limited harus diganti SSID fallback portal free.');
   assert(clientList.clients.some(client=>client.mac_address===accountMac && client.ssid==='@PERUMNET_WiFi'), 'Parameter WLAN asli Ruijie harus diprioritaskan sebagai SSID portal akun.');
@@ -297,6 +305,18 @@ try {
   const accountCategoryResponse = await fetch(`${baseUrl}/api/admin/clients?category=account`, { headers:{ cookie:adminCookie } });
   const accountCategory = await accountCategoryResponse.json();
   assert(accountCategory.clients.length === 1 && accountCategory.clients[0].email === 'wifidog-test@example.com', 'Filter pengguna terdaftar harus hanya berisi akun yang mengisi data.');
+  const onlineCategoryResponse = await fetch(`${baseUrl}/api/admin/clients?category=online&limit=100`, { headers:{ cookie:adminCookie } });
+  const onlineCategory = await onlineCategoryResponse.json();
+  assert(onlineCategoryResponse.status === 200 && onlineCategory.clients.length >= 1 && onlineCategory.clients.every(client=>client.auth_status==='authorized'), 'Filter Online Sekarang hanya boleh menampilkan perangkat dengan sesi aktif.');
+  const weeklyReportResponse = await fetch(`${baseUrl}/api/admin/reports?period=weekly`, { headers:{ cookie:adminCookie } });
+  const weeklyReport = await weeklyReportResponse.json();
+  assert(weeklyReportResponse.status === 200 && weeklyReport.daily.length === 7 && weeklyReport.summary.total_bytes > 0 && weeklyReport.summary.session_count >= 1, 'Laporan mingguan harus menggabungkan data terpakai dan durasi sesi seluruh gateway.');
+  const monthlyGatewayReportResponse = await fetch(`${baseUrl}/api/admin/reports?period=monthly&gatewayId=test-gateway`, { headers:{ cookie:adminCookie } });
+  const monthlyGatewayReport = await monthlyGatewayReportResponse.json();
+  assert(monthlyGatewayReportResponse.status === 200 && monthlyGatewayReport.daily.length === 30 && monthlyGatewayReport.gateways.length === 1 && monthlyGatewayReport.gateways[0].id === 'test-gateway', 'Laporan bulanan harus mengikuti scope gateway yang dipilih.');
+  const pdfReportResponse = await fetch(`${baseUrl}/api/admin/reports.pdf?period=weekly&gatewayId=test-gateway`, { headers:{ cookie:adminCookie } });
+  const pdfReport = Buffer.from(await pdfReportResponse.arrayBuffer());
+  assert(pdfReportResponse.status === 200 && pdfReportResponse.headers.get('content-type') === 'application/pdf' && pdfReport.subarray(0,4).toString() === '%PDF' && pdfReport.length > 2000, 'Ekspor laporan harus menghasilkan PDF informatif yang valid.');
   const unauthorizedUsersResponse = await fetch(`${baseUrl}/api/admin/users`);
   assert(unauthorizedUsersResponse.status === 401, 'Database pengguna harus dilindungi session admin.');
   const adminUsersResponse = await fetch(`${baseUrl}/api/admin/users`, { headers:{ cookie:adminCookie } });
@@ -367,6 +387,15 @@ try {
   assert(!blockedNetwork.gateways.some(gateway=>gateway.id==='branch-gateway') && blockedNetwork.blockedGateways.some(gateway=>gateway.gateway_id==='branch-gateway'), 'Gateway terhapus harus hilang dari daftar aktif dan masuk daftar blokir.');
   const blockedGatewayRetry = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
   assert(blockedGatewayRetry.status === 302 && new URL(blockedGatewayRetry.headers.get('location')).searchParams.get('status') === 'blocked', 'Request berulang dari gateway terhapus tidak boleh mendaftarkannya kembali.');
+  const archiveBlockedGateway = await fetch(`${baseUrl}/api/admin/gateway-blocks/archive`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:adminCookie },
+    body:JSON.stringify({ gatewayId:'branch-gateway' })
+  });
+  assert(archiveBlockedGateway.status === 200, 'Admin harus dapat menghapus catatan gateway dari daftar blokir dashboard.');
+  const networkAfterArchive = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:adminCookie } })).json();
+  assert(!networkAfterArchive.blockedGateways.some(gateway=>gateway.gateway_id==='branch-gateway'), 'Gateway yang dihapus dari daftar blokir tidak boleh tetap tampil pada dashboard.');
+  const archivedGatewayRetry = await fetch(`${baseUrl}/auth/wifidogAuth/login/?gw_id=branch-gateway&gw_address=10.2.10.1&gw_port=2060&mac=${encodeURIComponent(mac)}&ip=10.2.10.10&ssid=VLAN10`, { redirect:'manual' });
+  assert(archivedGatewayRetry.status === 302 && new URL(archivedGatewayRetry.headers.get('location')).searchParams.get('status') === 'blocked', 'Menghapus catatan dari dashboard tidak boleh diam-diam membuka akses gateway.');
   const unblockGateway = await fetch(`${baseUrl}/api/admin/gateway-blocks`, {
     method:'DELETE', headers:{ 'content-type':'application/json', cookie:adminCookie },
     body:JSON.stringify({ gatewayId:'branch-gateway' })

@@ -1,10 +1,11 @@
 import { createServer } from 'node:http';
 import { readFile, writeFile, appendFile, mkdir, stat } from 'node:fs/promises';
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { join, normalize, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import nodemailer from 'nodemailer';
+import PDFDocument from 'pdfkit';
 
 try { process.loadEnvFile?.('.env'); } catch { /* .env is optional for local development */ }
 
@@ -160,6 +161,8 @@ try { db.exec("ALTER TABLE notifications ADD COLUMN gateway_id TEXT NOT NULL DEF
 try { db.exec("ALTER TABLE gateways ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending' CHECK(approval_status IN ('pending','approved'))"); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec('ALTER TABLE gateways ADD COLUMN approved_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
 try { db.exec('ALTER TABLE portal_network_routes ADD COLUMN network_description TEXT'); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec("ALTER TABLE portal_profile_content ADD COLUMN language TEXT NOT NULL DEFAULT 'id'"); } catch { /* The column already exists after an upgrade. */ }
+try { db.exec('ALTER TABLE gateway_blocks ADD COLUMN hidden_at TEXT'); } catch { /* The column already exists after an upgrade. */ }
 
 // Versions before multi-gateway support used MAC as the only primary key.
 // Rebuild the table once so the same device can be tracked independently on
@@ -286,6 +289,8 @@ const config = {
   smtpUser: process.env.SMTP_USER || '',
   smtpPassword: process.env.SMTP_PASSWORD || '',
   emailFrom: process.env.EMAIL_FROM || process.env.SMTP_USER || '',
+  emailReplyTo: process.env.EMAIL_REPLY_TO || 'it@perumnet.id',
+  smtpTlsServername: process.env.SMTP_TLS_SERVERNAME || process.env.SMTP_HOST || '',
   reyeeMode: process.env.REYEE_AUTH_MODE || 'mock', // mock | redirect
   reyeeUserParam: process.env.REYEE_USERNAME_PARAM || 'username',
   reyeePasswordParam: process.env.REYEE_PASSWORD_PARAM || 'password',
@@ -294,9 +299,16 @@ const config = {
   wifiDogSessionHours: Number(process.env.WIFIDOG_SESSION_HOURS || 12),
   wifiDogLimitedSessionHours: Number(process.env.WIFIDOG_LIMITED_SESSION_HOURS || 2),
   clientOfflineMinutes: Number(process.env.CLIENT_OFFLINE_MINUTES || 20),
-  passwordResetMinutes: Number(process.env.PASSWORD_RESET_MINUTES || 30)
+  passwordResetMinutes: Number(process.env.PASSWORD_RESET_MINUTES || 30),
+  adminSessionHours: Number(process.env.ADMIN_SESSION_HOURS || 3)
 };
-const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({ host:config.smtpHost, port:config.smtpPort, secure:config.smtpSecure, auth:{ user:config.smtpUser, pass:config.smtpPassword } }) : null;
+const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({
+  host:config.smtpHost,
+  port:config.smtpPort,
+  secure:config.smtpSecure,
+  auth:{ user:config.smtpUser, pass:config.smtpPassword },
+  tls:config.smtpTlsServername ? { servername:config.smtpTlsServername } : undefined
+}) : null;
 const id = () => randomBytes(16).toString('hex');
 const json = (res, status, value, headers = {}) => res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers }).end(JSON.stringify(value));
 const text = (res, status, value, headers = {}) => res.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', ...headers }).end(value);
@@ -319,7 +331,7 @@ const portalProfileDefaults = {
 };
 function publicPortalSettings() {
   const settings = db.prepare('SELECT welcome_title,welcome_text,limited_bandwidth_kbps,terms_text,default_ssid,account_ssid,free_ssid FROM portal_settings WHERE id=1').get();
-  const content = db.prepare(`SELECT profile,eyebrow,headline,description,primary_button_label,
+  const content = db.prepare(`SELECT profile,language,eyebrow,headline,description,primary_button_label,
     announcement_enabled,announcement_tone,announcement_title,announcement_text,
     announcement_link_label,announcement_link_url,updated_at
     FROM portal_profile_content ORDER BY profile`).all();
@@ -356,6 +368,7 @@ function normalizePortalProfile(profile, value = {}) {
   const defaults = portalProfileDefaults[profile];
   return {
     profile,
+    language:value.language === 'en' ? 'en' : 'id',
     ssid:normalizedPortalText(value.ssid, profile === 'account' ? '@PERUMNET_WiFi' : '@PERUMNET_FreeWiFi',128,`SSID Portal ${profile === 'account' ? 'Akun' : 'Free'}`),
     eyebrow:normalizedPortalText(value.eyebrow,defaults.eyebrow,80,'Label kecil'),
     headline:normalizedPortalText(value.headline,defaults.headline,160,'Judul portal'),
@@ -391,8 +404,34 @@ function sessionHoursFor(accessType) {
   return Number.isFinite(configured) && configured > 0 ? configured : fallback;
 }
 const cookie = (req, name) => Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map(v => v.trim().split('=')))[name];
-function adminSession(req) { const value = cookie(req, 'perumnet_admin'); if (!value) return false; const [encodedEmail, signature] = value.split('.'); const email = Buffer.from(encodedEmail || '', 'base64url').toString(); return email === config.adminEmail && signature === createHash('sha256').update(`${email}:${config.sessionSecret}`).digest('hex'); }
-function adminCookie(value, maxAge = 60 * 60 * 24 * 7) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
+const adminSessionSeconds = () => {
+  const hours = Number.isFinite(config.adminSessionHours) && config.adminSessionHours > 0 ? config.adminSessionHours : 3;
+  return Math.round(hours * 60 * 60);
+};
+function adminSessionSignature(encodedPayload) {
+  return createHmac('sha256',config.sessionSecret).update(encodedPayload).digest('hex');
+}
+function createAdminSession() {
+  const expiresAt = new Date(Date.now() + adminSessionSeconds() * 1000).toISOString();
+  const encodedPayload = Buffer.from(JSON.stringify({ email:config.adminEmail,expiresAt })).toString('base64url');
+  return { value:`${encodedPayload}.${adminSessionSignature(encodedPayload)}`,expiresAt };
+}
+function adminSession(req) {
+  const value = cookie(req, 'perumnet_admin');
+  if (!value) return false;
+  const [encodedPayload,signature] = value.split('.');
+  if (!encodedPayload || !signature) return false;
+  const expected = adminSessionSignature(encodedPayload);
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer,expectedBuffer)) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload,'base64url').toString());
+    if (payload.email !== config.adminEmail || !payload.expiresAt || payload.expiresAt <= new Date().toISOString()) return false;
+    return payload;
+  } catch { return false; }
+}
+function adminCookie(value, maxAge = adminSessionSeconds()) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
 function requireAdmin(req, res) { if (!adminSession(req)) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return false; } return true; }
 async function body(req) { let value = ''; for await (const part of req) value += part; try { return value ? JSON.parse(value) : {}; } catch { throw new Error('JSON tidak valid.'); } }
 const networkAliasPattern = /^(?:vlan|network|lan)[\s_-]*\d+$/i;
@@ -884,8 +923,8 @@ function deleteAndBlockGateway(gatewayId) {
     db.prepare('DELETE FROM clients WHERE gateway_id=?').run(scopedGatewayId);
     db.prepare('DELETE FROM portal_network_routes WHERE gateway_id=?').run(scopedGatewayId);
     db.prepare('DELETE FROM gateways WHERE id=?').run(scopedGatewayId);
-    db.prepare(`INSERT INTO gateway_blocks (gateway_id,blocked_at,reason) VALUES (?,?,?)
-      ON CONFLICT(gateway_id) DO UPDATE SET blocked_at=excluded.blocked_at,reason=excluded.reason`)
+    db.prepare(`INSERT INTO gateway_blocks (gateway_id,blocked_at,reason,hidden_at) VALUES (?,?,?,NULL)
+      ON CONFLICT(gateway_id) DO UPDATE SET blocked_at=excluded.blocked_at,reason=excluded.reason,hidden_at=NULL`)
       .run(scopedGatewayId, blockedAt, `Dihapus oleh administrator: ${gateway.name}`);
     db.exec('COMMIT');
   } catch (error) {
@@ -902,7 +941,7 @@ async function sendVerification(email, token) {
     return link;
   }
   await mailTransport.sendMail({
-    from:`PerumNet WiFi <${config.emailFrom}>`, to:email, subject:'Verifikasi akun WiFi PerumNet',
+    from:`PerumNet WiFi <${config.emailFrom}>`, replyTo:config.emailReplyTo, to:email, subject:'Verifikasi akun WiFi PerumNet',
     text:`Verifikasi akun PerumNet Anda melalui tautan berikut: ${link}`,
     html:`<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px"><h2 style="color:#008d85">Verifikasi akun PerumNet</h2><p>Klik tombol berikut untuk memverifikasi email dan mengaktifkan login High Speed.</p><p><a href="${link}" style="display:inline-block;padding:12px 20px;color:#fff;background:#04a99f;border-radius:8px;text-decoration:none;font-weight:700">Verifikasi Email</a></p><p style="color:#71828b;font-size:12px">Jika Anda tidak mendaftar, abaikan email ini.</p></div>`
   });
@@ -916,7 +955,7 @@ async function sendPasswordReset(email, token) {
     return link;
   }
   await mailTransport.sendMail({
-    from:`PerumNet WiFi <${config.emailFrom}>`, to:email, subject:'Reset kata sandi WiFi PerumNet',
+    from:`PerumNet WiFi <${config.emailFrom}>`, replyTo:config.emailReplyTo, to:email, subject:'Reset kata sandi WiFi PerumNet',
     text:`Atur ulang kata sandi akun PerumNet Anda melalui tautan berikut: ${link}. Tautan ini hanya berlaku sementara.`,
     html:`<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px"><h2 style="color:#008d85">Reset kata sandi PerumNet</h2><p>Klik tombol berikut untuk membuat kata sandi baru. Tautan ini berlaku selama ${config.passwordResetMinutes} menit dan hanya dapat digunakan satu kali.</p><p><a href="${link}" style="display:inline-block;padding:12px 20px;color:#fff;background:#04a99f;border-radius:8px;text-decoration:none;font-weight:700">Buat Kata Sandi Baru</a></p><p style="color:#71828b;font-size:12px">Jika Anda tidak meminta reset kata sandi, abaikan email ini.</p></div>`
   });
@@ -1055,6 +1094,227 @@ function monitoringData(url) {
   };
 }
 
+const reportPeriods = Object.freeze({
+  weekly:{ days:7,label:'Mingguan',rangeLabel:'7 hari terakhir' },
+  monthly:{ days:30,label:'Bulanan',rangeLabel:'30 hari terakhir' }
+});
+const positiveNumber = value => Math.max(0,Number(value || 0));
+const utcDay = value => new Date(value).toISOString().slice(0,10);
+function reportData(url) {
+  sweepOfflineClients();
+  const period = Object.hasOwn(reportPeriods,url.searchParams.get('period')) ? url.searchParams.get('period') : 'weekly';
+  const periodConfig = reportPeriods[period];
+  const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
+  const projectId = String(url.searchParams.get('projectId') || '').trim();
+  const now = new Date();
+  const startAt = new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate() - (periodConfig.days - 1)));
+  const gatewayConditions = ["g.id<>'unassigned'"];
+  const gatewayParams = [];
+  if (gatewayId) { gatewayConditions.push('g.id=?'); gatewayParams.push(gatewayId); }
+  else if (projectId) { gatewayConditions.push('g.project_id=?'); gatewayParams.push(projectId); }
+  const gateways = db.prepare(`SELECT g.id,g.name,g.project_id,p.name AS project_name
+    FROM gateways g JOIN projects p ON p.id=g.project_id WHERE ${gatewayConditions.join(' AND ')} ORDER BY p.name,g.name`).all(...gatewayParams);
+  const gatewayMap = new Map(gateways.map(gateway => [gateway.id,{ ...gateway,incoming_bytes:0,outgoing_bytes:0,total_bytes:0,session_seconds:0,session_count:0,account_sessions:0,free_sessions:0,_users:new Set(),_devices:new Set() }]));
+  const sampleConditions = ['s.sampled_at>=?','s.sampled_at<=?'];
+  const sampleParams = [startAt.toISOString(),now.toISOString()];
+  if (gatewayId) { sampleConditions.push('s.gateway_id=?'); sampleParams.push(gatewayId); }
+  else if (projectId) { sampleConditions.push('g.project_id=?'); sampleParams.push(projectId); }
+  const usageRows = db.prepare(`SELECT substr(s.sampled_at,1,10) AS day,s.gateway_id,g.name AS gateway_name,p.name AS project_name,
+    SUM(s.incoming_delta) AS incoming_bytes,SUM(s.outgoing_delta) AS outgoing_bytes
+    FROM telemetry_samples s JOIN gateways g ON g.id=s.gateway_id JOIN projects p ON p.id=g.project_id
+    WHERE ${sampleConditions.join(' AND ')} GROUP BY day,s.gateway_id ORDER BY day,s.gateway_id`).all(...sampleParams);
+  const sessionConditions = ['s.authorized_at IS NOT NULL','s.authorized_at<=?',"COALESCE(s.revoked_at,s.last_counter_at,s.authorized_until,s.authorized_at)>=?"];
+  const sessionParams = [now.toISOString(),startAt.toISOString()];
+  if (gatewayId) { sessionConditions.push('s.gateway_id=?'); sessionParams.push(gatewayId); }
+  else if (projectId) { sessionConditions.push('g.project_id=?'); sessionParams.push(projectId); }
+  const sessions = db.prepare(`SELECT s.gateway_id,s.mac_address,s.user_id,s.access_type,s.authorized_at,s.authorized_until,
+    s.revoked_at,s.last_counter_at,c.auth_status AS current_auth_status,c.session_started_at AS current_session_started_at,
+    c.last_seen_at AS current_last_seen_at,c.authorized_until AS current_authorized_until,g.name AS gateway_name,p.name AS project_name
+    FROM captive_sessions s JOIN gateways g ON g.id=s.gateway_id JOIN projects p ON p.id=g.project_id
+    LEFT JOIN clients c ON c.gateway_id=s.gateway_id AND c.mac_address=s.mac_address
+    WHERE ${sessionConditions.join(' AND ')} ORDER BY s.authorized_at`).all(...sessionParams);
+  const dailyMap = new Map();
+  for (let index = periodConfig.days - 1; index >= 0; index -= 1) {
+    const day = utcDay(new Date(now.getTime() - index * 24 * 60 * 60 * 1000));
+    dailyMap.set(day,{ day,incoming_bytes:0,outgoing_bytes:0,total_bytes:0,session_seconds:0,session_count:0 });
+  }
+  for (const row of usageRows) {
+    const gateway = gatewayMap.get(row.gateway_id) || { id:row.gateway_id,name:row.gateway_name,project_name:row.project_name,incoming_bytes:0,outgoing_bytes:0,total_bytes:0,session_seconds:0,session_count:0,account_sessions:0,free_sessions:0,_users:new Set(),_devices:new Set() };
+    gateway.incoming_bytes += positiveNumber(row.incoming_bytes);
+    gateway.outgoing_bytes += positiveNumber(row.outgoing_bytes);
+    gateway.total_bytes = gateway.incoming_bytes + gateway.outgoing_bytes;
+    gatewayMap.set(row.gateway_id,gateway);
+    const daily = dailyMap.get(row.day);
+    if (daily) {
+      daily.incoming_bytes += positiveNumber(row.incoming_bytes);
+      daily.outgoing_bytes += positiveNumber(row.outgoing_bytes);
+      daily.total_bytes = daily.incoming_bytes + daily.outgoing_bytes;
+    }
+  }
+  const reportEndMs = now.getTime();
+  const reportStartMs = startAt.getTime();
+  for (const session of sessions) {
+    const gateway = gatewayMap.get(session.gateway_id) || { id:session.gateway_id,name:session.gateway_name,project_name:session.project_name,incoming_bytes:0,outgoing_bytes:0,total_bytes:0,session_seconds:0,session_count:0,account_sessions:0,free_sessions:0,_users:new Set(),_devices:new Set() };
+    const authorizedMs = new Date(session.authorized_at).getTime();
+    const authorizedUntilMs = new Date(session.authorized_until || now).getTime();
+    const isCurrent = session.current_session_started_at === session.authorized_at && session.current_authorized_until === session.authorized_until;
+    let endMs;
+    if (session.revoked_at) endMs = new Date(session.revoked_at).getTime();
+    else if (isCurrent && session.current_auth_status === 'authorized') endMs = Math.min(reportEndMs,authorizedUntilMs);
+    else if (session.last_counter_at) endMs = new Date(session.last_counter_at).getTime();
+    else if (isCurrent && session.current_last_seen_at) endMs = new Date(session.current_last_seen_at).getTime();
+    else endMs = authorizedUntilMs;
+    let cursor = Math.max(reportStartMs,authorizedMs);
+    endMs = Math.min(reportEndMs,authorizedUntilMs,Number.isFinite(endMs) ? endMs : reportEndMs);
+    if (!Number.isFinite(cursor) || endMs <= cursor) continue;
+    gateway.session_count += 1;
+    gateway[session.access_type === 'limited' ? 'free_sessions' : 'account_sessions'] += 1;
+    gateway._devices.add(session.mac_address);
+    if (session.user_id) gateway._users.add(session.user_id);
+    const durationSeconds = Math.floor((endMs - cursor) / 1000);
+    gateway.session_seconds += durationSeconds;
+    gatewayMap.set(session.gateway_id,gateway);
+    let firstDay = true;
+    while (cursor < endMs) {
+      const cursorDate = new Date(cursor);
+      const nextDay = Date.UTC(cursorDate.getUTCFullYear(),cursorDate.getUTCMonth(),cursorDate.getUTCDate() + 1);
+      const sliceEnd = Math.min(endMs,nextDay);
+      const daily = dailyMap.get(utcDay(cursorDate));
+      if (daily) {
+        daily.session_seconds += Math.floor((sliceEnd - cursor) / 1000);
+        if (firstDay) daily.session_count += 1;
+      }
+      firstDay = false;
+      cursor = sliceEnd;
+    }
+  }
+  const gatewayRows = [...gatewayMap.values()].map(({ _users,_devices,...gateway }) => ({ ...gateway,registered_users:_users.size,devices:_devices.size }))
+    .sort((a,b) => b.total_bytes - a.total_bytes || b.session_seconds - a.session_seconds || a.name.localeCompare(b.name));
+  const daily = [...dailyMap.values()];
+  const summary = gatewayRows.reduce((total,gateway) => ({
+    incoming_bytes:total.incoming_bytes + gateway.incoming_bytes,
+    outgoing_bytes:total.outgoing_bytes + gateway.outgoing_bytes,
+    total_bytes:total.total_bytes + gateway.total_bytes,
+    session_seconds:total.session_seconds + gateway.session_seconds,
+    session_count:total.session_count + gateway.session_count,
+    account_sessions:total.account_sessions + gateway.account_sessions,
+    free_sessions:total.free_sessions + gateway.free_sessions
+  }),{ incoming_bytes:0,outgoing_bytes:0,total_bytes:0,session_seconds:0,session_count:0,account_sessions:0,free_sessions:0 });
+  const selectedGateway = gatewayId ? gateways.find(gateway => gateway.id === gatewayId) : null;
+  const selectedProject = projectId ? db.prepare('SELECT name FROM projects WHERE id=?').get(projectId) : null;
+  const scope = selectedGateway ? `${selectedGateway.name} · ${selectedGateway.project_name}` : selectedProject ? `Project ${selectedProject.name}` : 'Gabungan seluruh gateway';
+  return { period,period_label:periodConfig.label,range_label:periodConfig.rangeLabel,scope,generated_at:now.toISOString(),start_at:startAt.toISOString(),end_at:now.toISOString(),summary:{ ...summary,gateway_count:gatewayRows.length },daily,gateways:gatewayRows,retention_days:30 };
+}
+const reportBytes = value => {
+  const units = ['B','KB','MB','GB','TB'];
+  let amount = positiveNumber(value),index = 0;
+  while (amount >= 1024 && index < units.length - 1) { amount /= 1024; index += 1; }
+  return `${amount >= 100 || index === 0 ? amount.toFixed(0) : amount.toFixed(1)} ${units[index]}`;
+};
+const reportDuration = value => {
+  const seconds = positiveNumber(value);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours}j ${minutes}m` : `${minutes} menit`;
+};
+function writeReportPdf(res,report) {
+  const filename = `laporan-jaringan-perumnet-${report.period}-${new Date().toISOString().slice(0,10)}.pdf`;
+  res.writeHead(200,{ 'content-type':'application/pdf','content-disposition':`attachment; filename="${filename}"`,'cache-control':'no-store' });
+  const doc = new PDFDocument({ size:'A4',margin:42,bufferPages:true,info:{ Title:`Laporan Jaringan PerumNet ${report.period_label}`,Author:'PerumNet' } });
+  doc.pipe(res);
+  const teal = '#08a79d',dark = '#244b48',muted = '#718885',line = '#dce9e6',orange = '#efb35a',pageWidth = doc.page.width;
+  const pageBottom = () => doc.page.height - 44;
+  const addHeader = (continuation = false) => {
+    doc.rect(0,0,pageWidth,116).fill(dark);
+    try { doc.image(join(root,'assets','perumnet-logo.png'),42,27,{ fit:[86,54] }); } catch { /* Logo is optional in generated reports. */ }
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(continuation ? 17 : 22).text(continuation ? 'Rincian Gateway' : 'Laporan Penggunaan Jaringan',156,31,{ width:pageWidth-198 });
+    doc.font('Helvetica').fontSize(10).fillColor('#d8efec').text(`${report.period_label} · ${report.scope}`,156,63,{ width:pageWidth-198 });
+    doc.fontSize(8).text(`${new Date(report.start_at).toLocaleDateString('id-ID')} - ${new Date(report.end_at).toLocaleDateString('id-ID')} · Dibuat ${new Date(report.generated_at).toLocaleString('id-ID')}`,156,82,{ width:pageWidth-198 });
+    doc.y = 138;
+  };
+  const sectionTitle = title => { doc.fillColor(dark).font('Helvetica-Bold').fontSize(13).text(title,42,doc.y); doc.moveDown(.55); };
+  addHeader();
+  const cards = [
+    ['Total data',reportBytes(report.summary.total_bytes)],
+    ['Durasi sesi',reportDuration(report.summary.session_seconds)],
+    ['Jumlah sesi',String(report.summary.session_count)],
+    ['Gateway',String(report.summary.gateway_count)]
+  ];
+  const cardGap = 9,cardWidth = (pageWidth - 84 - cardGap * 3) / 4,cardY = doc.y;
+  cards.forEach(([label,value],index) => {
+    const x = 42 + index * (cardWidth + cardGap);
+    doc.roundedRect(x,cardY,cardWidth,62,8).fillAndStroke('#f3f9f7',line);
+    doc.fillColor(muted).font('Helvetica').fontSize(7.5).text(label.toUpperCase(),x+10,cardY+11,{ width:cardWidth-20 });
+    doc.fillColor(dark).font('Helvetica-Bold').fontSize(14).text(value,x+10,cardY+28,{ width:cardWidth-20 });
+  });
+  doc.y = cardY + 82;
+  sectionTitle('Tren penggunaan harian');
+  const chartY = doc.y,chartHeight = 126,chartWidth = pageWidth - 84,reportedMaxUsage = Math.max(0,...report.daily.map(day => day.total_bytes)),maxUsage = Math.max(1,reportedMaxUsage);
+  doc.roundedRect(42,chartY,chartWidth,chartHeight,8).fillAndStroke('#fbfdfc',line);
+  const plotX = 58,plotY = chartY + 20,plotWidth = chartWidth - 32,plotHeight = 72,barGap = report.daily.length > 12 ? 2 : 6,barWidth = Math.max(3,(plotWidth - barGap * (report.daily.length - 1)) / Math.max(1,report.daily.length));
+  report.daily.forEach((day,index) => {
+    const totalHeight = Math.max(day.total_bytes ? 2 : 0,(day.total_bytes/maxUsage)*plotHeight);
+    const incomingHeight = day.total_bytes ? totalHeight*(day.incoming_bytes/day.total_bytes) : 0;
+    const x = plotX + index*(barWidth+barGap);
+    doc.rect(x,plotY+plotHeight-totalHeight,barWidth,totalHeight-incomingHeight).fill(orange);
+    doc.rect(x,plotY+plotHeight-incomingHeight,barWidth,incomingHeight).fill(teal);
+    if (report.daily.length <= 10 || index % Math.ceil(report.daily.length/8) === 0) doc.fillColor(muted).font('Helvetica').fontSize(6).text(new Date(`${day.day}T00:00:00Z`).toLocaleDateString('id-ID',{ day:'2-digit',month:'short' }),x-4,plotY+plotHeight+8,{ width:barWidth+14,align:'center' });
+  });
+  doc.fillColor(muted).fontSize(7).text(`Maksimum harian ${reportBytes(reportedMaxUsage)}  ·  Hijau: download  ·  Oranye: upload`,58,chartY+108,{ width:plotWidth });
+  doc.y = chartY + chartHeight + 20;
+  sectionTitle('Durasi sesi per hari');
+  const durationY = doc.y,durationHeight = 112,maxDuration = Math.max(1,...report.daily.map(day => day.session_seconds));
+  doc.roundedRect(42,durationY,chartWidth,durationHeight,8).fillAndStroke('#fbfdfc',line);
+  report.daily.forEach((day,index) => {
+    const height = Math.max(day.session_seconds ? 2 : 0,(day.session_seconds/maxDuration)*56);
+    const x = plotX + index*(barWidth+barGap);
+    doc.roundedRect(x,durationY+72-height,barWidth,height,Math.min(2,barWidth/2)).fill(dark);
+  });
+  doc.fillColor(muted).font('Helvetica').fontSize(7).text(`Total ${reportDuration(report.summary.session_seconds)} · ${report.summary.account_sessions} sesi akun · ${report.summary.free_sessions} sesi free`,58,durationY+88,{ width:plotWidth });
+  doc.y = durationY + durationHeight + 20;
+  sectionTitle('Ringkasan per gateway');
+  const drawTableHeader = () => {
+    const y = doc.y;
+    doc.rect(42,y,chartWidth,24).fill(dark);
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(7.5);
+    doc.text('GATEWAY / PROJECT',50,y+8,{ width:205 });
+    doc.text('DATA',270,y+8,{ width:75,align:'right' });
+    doc.text('DURASI',355,y+8,{ width:78,align:'right' });
+    doc.text('SESI',445,y+8,{ width:55,align:'right' });
+    doc.text('DEVICE',510,y+8,{ width:43,align:'right' });
+    doc.y = y + 24;
+  };
+  drawTableHeader();
+  if (!report.gateways.length) {
+    doc.fillColor(muted).font('Helvetica').fontSize(9).text('Belum ada data gateway pada periode dan cakupan ini.',50,doc.y+14);
+    doc.y += 44;
+  }
+  report.gateways.forEach((gateway,index) => {
+    if (doc.y + 38 > pageBottom()) { doc.addPage(); addHeader(true); sectionTitle('Ringkasan per gateway'); drawTableHeader(); }
+    const y = doc.y,bg = index % 2 ? '#f8fbfa' : '#ffffff';
+    doc.rect(42,y,chartWidth,36).fillAndStroke(bg,line);
+    doc.fillColor(dark).font('Helvetica-Bold').fontSize(8.2).text(gateway.name,50,y+7,{ width:205,ellipsis:true });
+    doc.fillColor(muted).font('Helvetica').fontSize(6.8).text(gateway.project_name || gateway.id,50,y+20,{ width:205,ellipsis:true });
+    doc.fillColor(dark).font('Helvetica-Bold').fontSize(8).text(reportBytes(gateway.total_bytes),270,y+12,{ width:75,align:'right' });
+    doc.text(reportDuration(gateway.session_seconds),355,y+12,{ width:78,align:'right' });
+    doc.text(String(gateway.session_count),445,y+12,{ width:55,align:'right' });
+    doc.text(String(gateway.devices),510,y+12,{ width:43,align:'right' });
+    doc.y = y + 36;
+  });
+  if (doc.y + 64 > pageBottom()) { doc.addPage(); addHeader(true); }
+  doc.moveDown(1);
+  const noteY = doc.y;
+  doc.roundedRect(42,noteY,chartWidth,48,7).fill('#eef7f5');
+  doc.fillColor(dark).font('Helvetica-Bold').fontSize(8).text('Catatan sumber data',54,noteY+10);
+  doc.fillColor(muted).font('Helvetica').fontSize(7.2).text(`Penggunaan data berasal dari callback counters WiFiDog Reyee. Durasi sesi dihitung dari otorisasi hingga logout, heartbeat terakhir, atau masa akses berakhir. Histori tersimpan ${report.retention_days} hari.`,54,noteY+23,{ width:chartWidth-24 });
+  const pageRange = doc.bufferedPageRange();
+  for (let pageIndex = 0; pageIndex < pageRange.count; pageIndex += 1) {
+    doc.switchToPage(pageRange.start + pageIndex);
+    doc.fillColor(muted).font('Helvetica').fontSize(7).text(`PerumNet Portal · Halaman ${pageIndex + 1} dari ${pageRange.count}`,42,doc.page.height-65,{ width:pageWidth-84,align:'center',lineBreak:false });
+  }
+  doc.end();
+}
+
 async function api(req, res, url) {
   const route = url.pathname;
   if (route === '/api/settings' && req.method === 'GET') {
@@ -1166,8 +1426,17 @@ async function api(req, res, url) {
     const authorization = authorize(captive, 'limited', `guest-${captive.client_mac || id().slice(0,8)}`);
     return json(res, 200, { bandwidthKbps:setting.limited_bandwidth_kbps, sessionHours:sessionHoursFor('limited'), authorization });
   }
-  if (route === '/api/admin/login' && req.method === 'POST') { const { email, password } = await body(req); if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error: 'Kredensial admin tidak tepat.' }); const sig = createHash('sha256').update(`${config.adminEmail}:${config.sessionSecret}`).digest('hex'); const encodedEmail = Buffer.from(config.adminEmail).toString('base64url'); return json(res, 200, { ok: true, email:config.adminEmail }, { 'set-cookie': adminCookie(`${encodedEmail}.${sig}`) }); }
-  if (route === '/api/admin/session' && req.method === 'GET') { if (!adminSession(req)) return json(res, 401, { error: 'Sesi admin diperlukan.' }); return json(res, 200, { ok:true, email:config.adminEmail }); }
+  if (route === '/api/admin/login' && req.method === 'POST') {
+    const { email,password } = await body(req);
+    if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error:'Kredensial admin tidak tepat.' });
+    const session = createAdminSession();
+    return json(res, 200, { ok:true,email:config.adminEmail,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 }, { 'set-cookie':adminCookie(session.value) });
+  }
+  if (route === '/api/admin/session' && req.method === 'GET') {
+    const session = adminSession(req);
+    if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' }, { 'set-cookie':adminCookie('',0) });
+    return json(res, 200, { ok:true,email:config.adminEmail,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 });
+  }
   if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
   if (route === '/api/admin/network' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
@@ -1187,7 +1456,7 @@ async function api(req, res, url) {
       FROM portal_network_routes n JOIN gateways g ON g.id=n.gateway_id JOIN projects p ON p.id=g.project_id
       WHERE UPPER(n.network_alias) LIKE 'VLAN%'
       ORDER BY p.name,g.name,CAST(SUBSTR(n.network_alias,5) AS INTEGER)`).all();
-    const blockedGateways = db.prepare('SELECT gateway_id,blocked_at,reason FROM gateway_blocks ORDER BY blocked_at DESC').all();
+    const blockedGateways = db.prepare('SELECT gateway_id,blocked_at,reason FROM gateway_blocks WHERE hidden_at IS NULL ORDER BY blocked_at DESC').all();
     const offlineDeadline = new Date(Date.now() - (Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20) * 60 * 1000).toISOString();
     return json(res, 200, {
       projects,
@@ -1200,6 +1469,14 @@ async function api(req, res, url) {
     if (!requireAdmin(req,res)) return;
     sweepOfflineClients();
     return json(res, 200, monitoringData(url));
+  }
+  if (route === '/api/admin/reports' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    return json(res,200,reportData(url),{ 'cache-control':'no-store' });
+  }
+  if (route === '/api/admin/reports.pdf' && req.method === 'GET') {
+    if (!requireAdmin(req,res)) return;
+    return writeReportPdf(res,reportData(url));
   }
   if (route === '/api/admin/projects' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
@@ -1255,6 +1532,15 @@ async function api(req, res, url) {
     const result = db.prepare('DELETE FROM gateway_blocks WHERE gateway_id=?').run(gatewayId);
     if (!result.changes) return json(res, 404, { error:'Gateway tidak ada dalam daftar blokir.' });
     return json(res, 200, { ok:true, gatewayId, message:'Blokir dibuka. Request berikutnya akan masuk sebagai gateway pending.' });
+  }
+  if (route === '/api/admin/gateway-blocks/archive' && req.method === 'POST') {
+    if (!requireAdmin(req,res)) return;
+    const payload = await body(req);
+    const gatewayId = gatewayKey(payload.gatewayId);
+    if (gatewayId === 'unassigned') return json(res, 400, { error:'ID gateway tidak valid.' });
+    const result = db.prepare('UPDATE gateway_blocks SET hidden_at=? WHERE gateway_id=? AND hidden_at IS NULL').run(new Date().toISOString(),gatewayId);
+    if (!result.changes) return json(res, 404, { error:'Gateway tidak ditemukan pada daftar blokir aktif.' });
+    return json(res, 200, { ok:true,gatewayId,blocked:true,message:'Catatan gateway dihapus dari dashboard. ID tetap diblokir agar tidak dapat mendaftar kembali.' });
   }
   if (route === '/api/admin/portal-networks' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
@@ -1399,7 +1685,7 @@ async function api(req, res, url) {
     sweepOfflineClients();
     const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
     const projectId = String(url.searchParams.get('projectId') || '').trim();
-    const category = ['all','account','free','pending'].includes(url.searchParams.get('category')) ? url.searchParams.get('category') : 'all';
+    const category = ['all','online','account','free','pending'].includes(url.searchParams.get('category')) ? url.searchParams.get('category') : 'all';
     const search = String(url.searchParams.get('search') || '').trim().toLowerCase().slice(0,120);
     const allowedLimits = [10,25,50,100];
     const requestedLimit = Number(url.searchParams.get('limit') || 10);
@@ -1411,7 +1697,8 @@ async function api(req, res, url) {
     else if (projectId) { scopeConditions.push('g.project_id=?'); scopeParams.push(projectId); }
     const filteredConditions = [...scopeConditions];
     const filteredParams = [...scopeParams];
-    if (category === 'account') filteredConditions.push('c.user_id IS NOT NULL');
+    if (category === 'online') filteredConditions.push("c.auth_status='authorized'");
+    else if (category === 'account') filteredConditions.push('c.user_id IS NOT NULL');
     else if (category === 'free') filteredConditions.push("c.user_id IS NULL AND c.access_type='limited'");
     else if (category === 'pending') filteredConditions.push('c.user_id IS NULL AND c.access_type IS NULL');
     if (search) {
@@ -1454,6 +1741,7 @@ async function api(req, res, url) {
       SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized
       FROM clients c JOIN gateways g ON g.id=c.gateway_id ${scopeWhere}`).get(today, ...scopeParams);
     const categoryCounts = db.prepare(`SELECT COUNT(*) AS all_count,
+      SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS online_count,
       SUM(CASE WHEN c.user_id IS NOT NULL THEN 1 ELSE 0 END) AS account_count,
       SUM(CASE WHEN c.user_id IS NULL AND c.access_type='limited' THEN 1 ELSE 0 END) AS free_count,
       SUM(CASE WHEN c.user_id IS NULL AND c.access_type IS NULL THEN 1 ELSE 0 END) AS pending_count
@@ -1461,7 +1749,7 @@ async function api(req, res, url) {
     return json(res, 200, {
       clients,
       stats:{ total:stats.total || 0, today:stats.today || 0, authorized:stats.authorized || 0 },
-      categories:{ all:categoryCounts.all_count || 0, account:categoryCounts.account_count || 0, free:categoryCounts.free_count || 0, pending:categoryCounts.pending_count || 0 },
+      categories:{ all:categoryCounts.all_count || 0, online:categoryCounts.online_count || 0, account:categoryCounts.account_count || 0, free:categoryCounts.free_count || 0, pending:categoryCounts.pending_count || 0 },
       pagination:{ page, limit, total:totalFiltered, totalPages }
     });
   }
@@ -1556,17 +1844,17 @@ async function api(req, res, url) {
         default_ssid=?,account_ssid=?,free_ssid=?,updated_at=? WHERE id=1`)
         .run(account.headline,account.description,bandwidth,termsText,account.ssid,account.ssid,free.ssid,now);
       const saveProfile = db.prepare(`INSERT INTO portal_profile_content
-        (profile,eyebrow,headline,description,primary_button_label,announcement_enabled,announcement_tone,
+        (profile,language,eyebrow,headline,description,primary_button_label,announcement_enabled,announcement_tone,
           announcement_title,announcement_text,announcement_link_label,announcement_link_url,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(profile) DO UPDATE SET eyebrow=excluded.eyebrow,headline=excluded.headline,
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(profile) DO UPDATE SET language=excluded.language,eyebrow=excluded.eyebrow,headline=excluded.headline,
           description=excluded.description,primary_button_label=excluded.primary_button_label,
           announcement_enabled=excluded.announcement_enabled,announcement_tone=excluded.announcement_tone,
           announcement_title=excluded.announcement_title,announcement_text=excluded.announcement_text,
           announcement_link_label=excluded.announcement_link_label,announcement_link_url=excluded.announcement_link_url,
           updated_at=excluded.updated_at`);
       for (const profile of [account,free]) {
-        saveProfile.run(profile.profile,profile.eyebrow,profile.headline,profile.description,profile.primary_button_label,
+        saveProfile.run(profile.profile,profile.language,profile.eyebrow,profile.headline,profile.description,profile.primary_button_label,
           profile.announcement_enabled,profile.announcement_tone,profile.announcement_title,profile.announcement_text,
           profile.announcement_link_label,profile.announcement_link_url,now);
       }

@@ -73,9 +73,13 @@ assert(['gateway_id','mac_address','user_id','ssid','sampled_at','incoming_delta
 const gatewayColumns = migrated.prepare('PRAGMA table_info(gateways)').all();
 assert(['approval_status','approved_at'].every(name=>gatewayColumns.some(column=>column.name===name)),'Migrasi harus menambahkan status verifikasi gateway.');
 assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='gateway_blocks'").get(),'Migrasi harus menyediakan daftar blokir gateway.');
+const gatewayBlockColumns = migrated.prepare('PRAGMA table_info(gateway_blocks)').all();
+assert(gatewayBlockColumns.some(column=>column.name==='hidden_at'),'Migrasi harus dapat menyembunyikan catatan gateway terblokir tanpa membuka blokir ID.');
 const routeColumns = migrated.prepare('PRAGMA table_info(portal_network_routes)').all();
 assert(routeColumns.some(column=>column.name==='network_description'),'Migrasi harus menambahkan deskripsi VLAN tanpa merusak routing lama.');
 assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='portal_profile_content'").get(),'Migrasi harus menambahkan konten terpisah untuk Portal Akun dan Portal Free.');
+const portalProfileColumns = migrated.prepare('PRAGMA table_info(portal_profile_content)').all();
+assert(portalProfileColumns.some(column=>column.name==='language'),'Migrasi harus menyimpan pilihan bahasa secara terpisah untuk setiap profil portal.');
 assert(migrated.prepare("SELECT COUNT(*) AS total FROM portal_profile_content").get().total===2,'Migrasi harus menginisialisasi tepat dua profil konten portal.');
 assert(migrated.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='portal_promotions'").get(),'Migrasi harus menyediakan penyimpanan promo dinamis.');
 const migratedRoutes = migrated.prepare("SELECT network_alias,client_cidr,portal_mode FROM portal_network_routes WHERE gateway_id='legacy-gateway'").all();
