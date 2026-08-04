@@ -39,6 +39,16 @@ Gateway yang dihapus masuk ke daftar blokir agar ID yang sama tidak dapat mendaf
 
 Database versi lama dimigrasikan otomatis saat aplikasi pertama kali dijalankan. Sebelum upgrade produksi, tetap buat salinan `data/portal.db`; deployment VPS pada project ini melakukan backup tersebut sebelum proses PM2 direstart.
 
+## Keamanan
+
+Server hanya menyajikan daftar file yang diizinkan (`index.html`, `app.js`, `styles.css`, dan `assets/`). Direktori `data/`, berkas `.env`, source code, serta metadata git tidak pernah dapat diunduh melalui HTTP. Konfigurasi nginx pada `deploy/nginx/` menambahkan lapisan kedua berupa `deny` untuk path tersebut.
+
+Saat `NODE_ENV=production`, aplikasi menolak start bila `SESSION_SECRET`, `ADMIN_PASSWORD`, atau `ADMIN_EMAIL` masih bernilai default, atau bila `SESSION_SECRET` kurang dari 32 karakter. Buat nilainya dengan `openssl rand -hex 32`.
+
+Sesi admin dicatat di tabel `admin_sessions` sehingga logout benar-benar mencabut cookie, dan mengganti kredensial admin langsung membatalkan seluruh sesi yang masih berjalan. Endpoint autentikasi dibatasi rate limit per alamat IP, ukuran request body dibatasi 256 KB (6 MB khusus upload gambar), dan seluruh respons HTML membawa CSP, `X-Frame-Options`, serta `nosniff`.
+
+Jalankan `npm test` sebelum deploy; `tests/security.mjs` mengunci kontrak keamanan di atas agar tidak mengalami regresi.
+
 Untuk deployment, gunakan HTTPS publik, set `APP_BASE_URL`, ganti semua credential default, lalu isi konfigurasi `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM`, dan `EMAIL_REPLY_TO` untuk email verifikasi. Gunakan mailbox serta app password khusus `no-reply@perumnet.id`, lalu arahkan balasan ke `it@perumnet.id`. Jika aplikasi menghubungi mail server melalui IP privat atau Tailscale, isi `SMTP_TLS_SERVERNAME` dengan hostname pada sertifikat TLS (misalnya `mail.perumnet.id`).
 
 Tautan lupa kata sandi memakai SMTP yang sama, hanya dapat digunakan satu kali, dan berlaku 30 menit. Durasi ini dapat diubah melalui `PASSWORD_RESET_MINUTES`.

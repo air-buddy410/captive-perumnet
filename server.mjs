@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile, writeFile, appendFile, mkdir, stat } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
-import { join, normalize, extname, resolve } from 'node:path';
+import { join, extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import nodemailer from 'nodemailer';
@@ -276,6 +276,13 @@ db.prepare(`INSERT OR IGNORE INTO portal_profile_content
   VALUES ('free',?,?,?,?,0,'info',?)`)
   .run('Akses gratis', 'Terhubung dalam satu klik.', 'Tidak perlu akun atau mengisi data diri. Tekan tombol di bawah untuk mulai menggunakan internet.', 'Sambungkan Internet Gratis', new Date().toISOString());
 
+// Admin cookies used to be self-contained, so logging out or rotating the admin
+// password left every issued cookie valid until it expired. Tracking them here
+// gives the dashboard a real kill switch.
+db.exec(`CREATE TABLE IF NOT EXISTS admin_sessions (
+  id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT
+)`);
+
 const config = {
   port: Number(process.env.PORT || 3000),
   baseUrl: process.env.APP_BASE_URL || 'http://localhost:3000',
@@ -302,6 +309,24 @@ const config = {
   passwordResetMinutes: Number(process.env.PASSWORD_RESET_MINUTES || 30),
   adminSessionHours: Number(process.env.ADMIN_SESSION_HOURS || 3)
 };
+// A production deployment that still carries the shipped defaults would accept
+// forged admin cookies, so refuse to start instead of failing open.
+if (config.nodeEnv === 'production') {
+  const insecureDefaults = [
+    ['SESSION_SECRET', config.sessionSecret === 'development-only-change-me'],
+    ['ADMIN_PASSWORD', config.adminPassword === 'password'],
+    ['ADMIN_EMAIL', config.adminEmail === 'admin@kopipagi.id']
+  ].filter(([, isDefault]) => isDefault).map(([name]) => name);
+  if (insecureDefaults.length) {
+    console.error(`Menolak start: ${insecureDefaults.join(', ')} masih memakai nilai default. Isi nilai acak yang kuat di .env sebelum menjalankan portal.`);
+    process.exit(1);
+  }
+  if (config.sessionSecret.length < 32) {
+    console.error('Menolak start: SESSION_SECRET minimal 32 karakter.');
+    process.exit(1);
+  }
+}
+
 const mailTransport = config.smtpHost && config.smtpUser && config.smtpPassword ? nodemailer.createTransport({
   host:config.smtpHost,
   port:config.smtpPort,
@@ -315,6 +340,10 @@ const text = (res, status, value, headers = {}) => res.writeHead(status, { 'cont
 const hashPassword = (password) => { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; };
 const verifyPassword = (password, stored) => { const [salt, key] = stored.split(':'); const actual = scryptSync(password, salt, 64).toString('hex'); return timingSafeEqual(Buffer.from(actual, 'hex'), Buffer.from(key, 'hex')); };
 const hashToken = (token) => createHash('sha256').update(token).digest('hex');
+// Comparing admin credentials with === leaks their length and content through
+// response timing; hashing first keeps both operands the same size.
+const matchesSecret = (candidate, expected) =>
+  timingSafeEqual(createHash('sha256').update(String(candidate ?? '')).digest(), createHash('sha256').update(String(expected ?? '')).digest());
 const portalProfileDefaults = {
   account:{
     eyebrow:'Akses pelanggan',
@@ -411,10 +440,21 @@ const adminSessionSeconds = () => {
 function adminSessionSignature(encodedPayload) {
   return createHmac('sha256',config.sessionSecret).update(encodedPayload).digest('hex');
 }
+// Binding the cookie to the active credentials means rotating ADMIN_PASSWORD
+// immediately invalidates every session that was issued under the old one.
+const adminCredentialFingerprint = () =>
+  createHash('sha256').update(`${config.adminEmail} ${config.adminPassword}`).digest('hex').slice(0,32);
 function createAdminSession() {
+  const nowIso = new Date().toISOString();
   const expiresAt = new Date(Date.now() + adminSessionSeconds() * 1000).toISOString();
-  const encodedPayload = Buffer.from(JSON.stringify({ email:config.adminEmail,expiresAt })).toString('base64url');
+  db.prepare('DELETE FROM admin_sessions WHERE expires_at<?').run(nowIso);
+  const sessionId = id();
+  db.prepare('INSERT INTO admin_sessions (id,created_at,expires_at) VALUES (?,?,?)').run(sessionId, nowIso, expiresAt);
+  const encodedPayload = Buffer.from(JSON.stringify({ jti:sessionId,email:config.adminEmail,cred:adminCredentialFingerprint(),expiresAt })).toString('base64url');
   return { value:`${encodedPayload}.${adminSessionSignature(encodedPayload)}`,expiresAt };
+}
+function revokeAdminSession(sessionId) {
+  if (sessionId) db.prepare('UPDATE admin_sessions SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(new Date().toISOString(), sessionId);
 }
 function adminSession(req) {
   const value = cookie(req, 'perumnet_admin');
@@ -428,12 +468,60 @@ function adminSession(req) {
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload,'base64url').toString());
     if (payload.email !== config.adminEmail || !payload.expiresAt || payload.expiresAt <= new Date().toISOString()) return false;
+    if (payload.cred !== adminCredentialFingerprint()) return false;
+    // A signed cookie is no longer enough on its own: the session must still be
+    // present and unrevoked so logout and credential rotation take effect.
+    const stored = payload.jti ? db.prepare('SELECT revoked_at,expires_at FROM admin_sessions WHERE id=?').get(payload.jti) : null;
+    if (!stored || stored.revoked_at || stored.expires_at <= new Date().toISOString()) return false;
     return payload;
   } catch { return false; }
 }
 function adminCookie(value, maxAge = adminSessionSeconds()) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
 function requireAdmin(req, res) { if (!adminSession(req)) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return false; } return true; }
-async function body(req) { let value = ''; for await (const part of req) value += part; try { return value ? JSON.parse(value) : {}; } catch { throw new Error('JSON tidak valid.'); } }
+const DEFAULT_BODY_LIMIT = 256 * 1024;
+const UPLOAD_BODY_LIMIT = 6 * 1024 * 1024;
+function httpError(status, message) { const error = new Error(message); error.statusCode = status; return error; }
+// Buffering an unbounded request body let any unauthenticated caller exhaust
+// server memory, so stop reading as soon as the route's limit is exceeded.
+async function body(req, limitBytes = DEFAULT_BODY_LIMIT) {
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > limitBytes) throw httpError(413, 'Ukuran permintaan terlalu besar.');
+  let size = 0;
+  const chunks = [];
+  for await (const part of req) {
+    size += part.length;
+    if (size > limitBytes) { req.destroy(); throw httpError(413, 'Ukuran permintaan terlalu besar.'); }
+    chunks.push(part);
+  }
+  const value = Buffer.concat(chunks).toString('utf8');
+  try { return value ? JSON.parse(value) : {}; } catch { throw httpError(400, 'JSON tidak valid.'); }
+}
+
+// Fixed-window counters keyed by client address. Captive portals sit behind a
+// single nginx hop, so trust the last X-Forwarded-For entry only for loopback.
+const rateBuckets = new Map();
+function clientAddress(req) {
+  const remote = req.socket.remoteAddress || 'unknown';
+  if (remote === '127.0.0.1' || remote === '::1' || remote === '::ffff:127.0.0.1') {
+    const forwarded = String(req.headers['x-forwarded-for'] || '').split(',').map(part => part.trim()).filter(Boolean);
+    if (forwarded.length) return forwarded[forwarded.length - 1];
+  }
+  return remote;
+}
+function rateLimited(req, res, name, limit, windowMs) {
+  const now = Date.now();
+  if (rateBuckets.size > 5000) {
+    for (const [key, entry] of rateBuckets) if (entry.resetAt <= now) rateBuckets.delete(key);
+  }
+  const key = `${name}:${clientAddress(req)}`;
+  const entry = rateBuckets.get(key);
+  if (!entry || entry.resetAt <= now) { rateBuckets.set(key, { count:1, resetAt:now + windowMs }); return false; }
+  entry.count += 1;
+  if (entry.count <= limit) return false;
+  const retryAfter = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  json(res, 429, { error:'Terlalu banyak percobaan. Coba kembali beberapa saat lagi.' }, { 'retry-after':String(retryAfter) });
+  return true;
+}
 const networkAliasPattern = /^(?:vlan|network|lan)[\s_-]*\d+$/i;
 function normalizeNetworkAlias(value) {
   const alias = String(value || '').trim();
@@ -743,7 +831,10 @@ function wifiDogAuthorization(context, profile, userId) {
     (authorized_at IS NULL AND login_expires_at < ?) OR
     (authorized_at IS NOT NULL AND authorized_until < ?) OR
     (revoked_at IS NOT NULL AND revoked_at < ?)`).run(nowIso, nowIso, revokedRetention);
-  db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE gateway_id=? AND mac_address=? AND revoked_at IS NULL').run(nowIso, gatewayId, mac);
+  // Retire only tokens the gateway has not confirmed yet. Revoking a confirmed
+  // session here allowed anyone on the SSID to disconnect another client simply
+  // by replaying that client's MAC into this unauthenticated endpoint.
+  db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE gateway_id=? AND mac_address=? AND revoked_at IS NULL AND authorized_at IS NULL').run(nowIso, gatewayId, mac);
   db.prepare(`INSERT INTO captive_sessions
     (token_hash,mac_address,client_ip,gateway_id,user_id,access_type,created_at,login_expires_at)
     VALUES (?,?,?,?,?,?,?,?)`).run(hashToken(token), mac, context.client_ip, gatewayId, userId, profile, nowIso, loginExpiresAt);
@@ -788,8 +879,12 @@ function confirmWifiDogSession(url) {
   trackClient({ ...context, gw_id:requestGatewayId });
 
   if (stage === 'logout') {
-    if (tokenSession) recordWifiDogTelemetry(tokenSession, url, now);
-    if (rawToken) db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
+    // Require the session token: without it any client could mark another
+    // device offline by replaying its MAC, polluting the dashboard and
+    // generating bogus "pelanggan offline" notifications.
+    if (!tokenSession || !mac || tokenSession.mac_address !== mac) return false;
+    recordWifiDogTelemetry(tokenSession, url, now);
+    db.prepare('UPDATE captive_sessions SET revoked_at=? WHERE token_hash=?').run(nowIso, hashToken(rawToken));
     markClientOffline(requestGatewayId, mac, 'logout');
     return false;
   }
@@ -1321,23 +1416,35 @@ async function api(req, res, url) {
     return json(res, 200, publicPortalSettings(), { 'cache-control':'no-store' });
   }
   if (route === '/api/auth/register' && req.method === 'POST') {
+    if (rateLimited(req, res, 'register', 10, 60 * 60 * 1000)) return;
     const { fullName, email, phone, address, password, consent, context } = await body(req);
     const captive = contextFrom(context);
     const gatewayError = gatewayAuthorizationError(captive);
     if (config.reyeeMode === 'redirect' && gatewayError) return json(res, 403, { error:gatewayError, gatewayStatus:gatewayApproval(captive, false).status });
     if (!fullName || !email || !phone || !address || !password || !consent) return json(res, 400, { error: 'Lengkapi data pendaftaran dan persetujuan.' });
-    if (password.length < 8) return json(res, 400, { error: 'Kata sandi minimal 8 karakter.' });
-    const normalized = String(email).toLowerCase().trim(); const exists = db.prepare('SELECT id FROM users WHERE email=?').get(normalized);
+    // Mirror the validation the admin-side user endpoint already applies so the
+    // public form cannot store unbounded or malformed records.
+    const normalizedName = String(fullName).trim().replace(/\s+/g,' ').slice(0,120);
+    const normalizedPhone = String(phone).trim().replace(/\s+/g,' ').slice(0,40);
+    const normalizedAddress = String(address).trim().replace(/\s+/g,' ').slice(0,500);
+    const normalized = String(email).toLowerCase().trim().slice(0,254);
+    if (normalizedName.length < 2) return json(res, 400, { error:'Nama lengkap minimal 2 karakter.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) return json(res, 400, { error:'Format email tidak valid.' });
+    if (normalizedPhone.length < 6) return json(res, 400, { error:'Nomor HP minimal 6 karakter.' });
+    if (normalizedAddress.length < 3) return json(res, 400, { error:'Alamat minimal 3 karakter.' });
+    if (String(password).length < 8) return json(res, 400, { error: 'Kata sandi minimal 8 karakter.' });
+    const exists = db.prepare('SELECT id FROM users WHERE email=?').get(normalized);
     if (exists) return json(res, 409, { error: 'Email ini sudah terdaftar. Silakan login.' });
     const token = randomBytes(24).toString('hex'); const userId = id();
     let verificationUrl;
     try { verificationUrl = await sendVerification(normalized, token); }
     catch (error) { console.error('Verification email failed:', error.message); return json(res, 503, { error:'Email verifikasi belum dapat dikirim. Hubungi administrator portal.' }); }
     db.prepare('INSERT INTO users (id,full_name,email,phone_number,address,password_hash,is_verified,verification_token,created_at) VALUES (?,?,?,?,?,?,?,?,?)')
-      .run(userId, fullName.trim(), normalized, phone.trim(), address.trim(), hashPassword(password), 0, hashToken(token), new Date().toISOString());
+      .run(userId, normalizedName, normalized, normalizedPhone, normalizedAddress, hashPassword(password), 0, hashToken(token), new Date().toISOString());
     return json(res, 201, { message: 'Cek email untuk verifikasi.', email: normalized, verificationUrl: process.env.NODE_ENV === 'production' ? undefined : verificationUrl });
   }
   if (route === '/api/auth/resend' && req.method === 'POST') {
+    if (rateLimited(req, res, 'resend', 5, 60 * 60 * 1000)) return;
     const { email } = await body(req); const normalized = String(email || '').toLowerCase().trim();
     const user = db.prepare('SELECT id,is_verified FROM users WHERE email=?').get(normalized);
     if (!user) return json(res, 200, { message:'Jika email terdaftar, tautan verifikasi akan dikirim.' });
@@ -1349,12 +1456,14 @@ async function api(req, res, url) {
     return json(res, 200, { message:'Email verifikasi dikirim ulang.' });
   }
   if (route === '/api/auth/verify' && req.method === 'POST') {
+    if (rateLimited(req, res, 'verify', 30, 15 * 60 * 1000)) return;
     const { token } = await body(req); const user = db.prepare('SELECT id FROM users WHERE verification_token=?').get(hashToken(token || ''));
     if (!user) return json(res, 400, { error: 'Tautan verifikasi tidak valid atau sudah digunakan.' });
     db.prepare('UPDATE users SET is_verified=1, verification_token=NULL WHERE id=?').run(user.id);
     return json(res, 200, { message: 'Email berhasil diverifikasi.' });
   }
   if (route === '/api/auth/forgot-password' && req.method === 'POST') {
+    if (rateLimited(req, res, 'forgot-password', 5, 60 * 60 * 1000)) return;
     const { email } = await body(req);
     const normalized = String(email || '').toLowerCase().trim();
     const genericMessage = 'Jika email terdaftar, tautan reset kata sandi akan dikirim.';
@@ -1381,6 +1490,7 @@ async function api(req, res, url) {
     return json(res, 200, { message:genericMessage });
   }
   if (route === '/api/auth/reset-password' && req.method === 'POST') {
+    if (rateLimited(req, res, 'reset-password', 10, 15 * 60 * 1000)) return;
     const { token, password } = await body(req);
     const newPassword = String(password || '');
     if (newPassword.length < 8) return json(res, 400, { error:'Kata sandi baru minimal 8 karakter.' });
@@ -1403,6 +1513,7 @@ async function api(req, res, url) {
     return json(res, 200, { message:'Kata sandi berhasil diperbarui.' });
   }
   if (route === '/api/auth/login' && req.method === 'POST') {
+    if (rateLimited(req, res, 'login', 20, 15 * 60 * 1000)) return;
     const { email, password, context } = await body(req);
     const captive = contextFrom(context);
     const gatewayError = gatewayAuthorizationError(captive);
@@ -1413,6 +1524,7 @@ async function api(req, res, url) {
     writeLog(user.id, captive, 'high_speed'); return json(res, 200, { authorization: authorize(captive, 'high_speed', user.email, user.id), user: { name: user.full_name, email: user.email } });
   }
   if (route === '/api/captive/limited' && req.method === 'POST') {
+    if (rateLimited(req, res, 'limited', 30, 15 * 60 * 1000)) return;
     const { context } = await body(req);
     const captive = contextFrom(context);
     const gatewayError = gatewayAuthorizationError(captive);
@@ -1427,8 +1539,9 @@ async function api(req, res, url) {
     return json(res, 200, { bandwidthKbps:setting.limited_bandwidth_kbps, sessionHours:sessionHoursFor('limited'), authorization });
   }
   if (route === '/api/admin/login' && req.method === 'POST') {
+    if (rateLimited(req, res, 'admin-login', 10, 15 * 60 * 1000)) return;
     const { email,password } = await body(req);
-    if (email !== config.adminEmail || password !== config.adminPassword) return json(res, 401, { error:'Kredensial admin tidak tepat.' });
+    if (!matchesSecret(email, config.adminEmail) || !matchesSecret(password, config.adminPassword)) return json(res, 401, { error:'Kredensial admin tidak tepat.' });
     const session = createAdminSession();
     return json(res, 200, { ok:true,email:config.adminEmail,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 }, { 'set-cookie':adminCookie(session.value) });
   }
@@ -1437,7 +1550,10 @@ async function api(req, res, url) {
     if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' }, { 'set-cookie':adminCookie('',0) });
     return json(res, 200, { ok:true,email:config.adminEmail,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 });
   }
-  if (route === '/api/admin/logout' && req.method === 'POST') return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
+  if (route === '/api/admin/logout' && req.method === 'POST') {
+    revokeAdminSession(adminSession(req)?.jti);
+    return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
+  }
   if (route === '/api/admin/network' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
     const projects = db.prepare(`SELECT p.id,p.name,p.location,p.created_at,
@@ -1789,7 +1905,7 @@ async function api(req, res, url) {
   }
   if (route === '/api/admin/uploads' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
-    const payload = await body(req);
+    const payload = await body(req, UPLOAD_BODY_LIMIT);
     const mimeType = String(payload.mimeType || '').toLowerCase();
     const extensionByMime = { 'image/png':'png','image/jpeg':'jpg','image/webp':'webp' };
     const extension = extensionByMime[mimeType];
@@ -1887,6 +2003,35 @@ async function api(req, res, url) {
   return json(res, 404, { error: 'Endpoint tidak ditemukan.' });
 }
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.jpg':'image/jpeg', '.jpeg':'image/jpeg', '.webp':'image/webp', '.svg':'image/svg+xml' };
+// Only these files may ever leave the web root. Serving the directory verbatim
+// exposed data/portal.db, .env and the .git directory to unauthenticated callers.
+const servableFiles = new Set(['/index.html', '/app.js', '/styles.css']);
+const servableAsset = pathname => /^\/assets\/[a-zA-Z0-9._-]+\.(?:png|jpe?g|webp|svg|ico)$/.test(pathname) && !pathname.includes('..');
+const portalEntryPoints = new Set(['/', '/admin', '/admin/', '/free', '/free/', '/gateway-review', '/gateway-review/']);
+// script-src stays strict because index.html loads no inline script; style-src
+// needs unsafe-inline for the chart bars app.js renders as style attributes.
+const contentSecurityPolicy = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "connect-src 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "object-src 'none'"
+].join('; ');
+function securityHeaders() {
+  const headers = {
+    'x-content-type-options':'nosniff',
+    'x-frame-options':'DENY',
+    'referrer-policy':'strict-origin-when-cross-origin',
+    'permissions-policy':'geolocation=(), microphone=(), camera=()',
+    'content-security-policy':contentSecurityPolicy
+  };
+  if (config.baseUrl.startsWith('https:')) headers['strict-transport-security'] = 'max-age=31536000; includeSubDomains';
+  return headers;
+}
 const server = createServer(async (req, res) => {
   // A request-target beginning with // is treated as a host by WHATWG URL.
   // ReyeeOS sends exactly that form for WiFiDog, so keep it as a path.
@@ -1914,7 +2059,7 @@ const server = createServer(async (req, res) => {
         freeLogin.search = url.search;
         res.writeHead(302, { location:freeLogin.toString(), 'cache-control':'no-store' }); return res.end();
       }
-      res.writeHead(200, { 'content-type': mime['.html'] }); return res.end(await readFile(join(root, 'index.html')));
+      res.writeHead(200, { 'content-type': mime['.html'], ...securityHeaders(), 'cache-control':'no-store' }); return res.end(await readFile(join(root, 'index.html')));
     }
     if (wifiDogPath === '/auth/wifidogAuth/ping/' || wifiDogPath === '/auth/wifidogAuth/ping') {
       ensureGateway(contextFrom(Object.fromEntries(url.searchParams.entries()))); return text(res, 200, 'Pong');
@@ -1946,10 +2091,21 @@ const server = createServer(async (req, res) => {
       });
       return res.end(await readFile(target));
     }
-    let pathname = (url.pathname === '/' || url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname === '/free' || url.pathname === '/free/' || url.pathname === '/gateway-review' || url.pathname === '/gateway-review/') ? '/index.html' : url.pathname;
-    const target = normalize(join(root, pathname));
-    if (!target.startsWith(root)) return json(res, 403, { error: 'Forbidden' });
-    await stat(target); res.writeHead(200, { 'content-type': mime[extname(target)] || 'application/octet-stream' }); res.end(await readFile(target));
-  } catch (error) { if (error.code === 'ENOENT') return json(res, 404, { error: 'Tidak ditemukan.' }); console.error(error); json(res, 500, { error: 'Kesalahan server.' }); }
+    const pathname = portalEntryPoints.has(url.pathname) ? '/index.html' : url.pathname;
+    if (!servableFiles.has(pathname) && !servableAsset(pathname)) return json(res, 404, { error: 'Tidak ditemukan.' });
+    const target = join(root, pathname.slice(1));
+    await stat(target);
+    res.writeHead(200, {
+      'content-type': mime[extname(target)] || 'application/octet-stream',
+      ...securityHeaders(),
+      'cache-control': pathname === '/index.html' ? 'no-store' : 'public, max-age=3600'
+    });
+    res.end(await readFile(target));
+  } catch (error) {
+    if (error.statusCode) return json(res, error.statusCode, { error: error.message });
+    if (error.code === 'ENOENT') return json(res, 404, { error: 'Tidak ditemukan.' });
+    console.error(error);
+    json(res, 500, { error: 'Kesalahan server.' });
+  }
 });
 server.listen(config.port, () => console.log(`PerumNet Captive Portal running at ${config.baseUrl}`));

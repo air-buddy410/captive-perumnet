@@ -134,26 +134,57 @@ let redirectTimer;
 let notificationTimer;
 let monitoringTimer;
 let analyticsTimer;
-let searchTimer;
+let leadSearchTimer;
+let userSearchTimer;
 let adminRefreshPromise;
 let tableRefreshPromise;
-async function api(path,payload,method) {
+// Polling and admin clicks compete for the same endpoints. A silent poll rides
+// along with whatever request is already in flight, while a user action aborts
+// the running poll and replaces it so the click is never swallowed.
+function createAdminRequestState() { return { promise:null,controller:null,token:0 }; }
+const adminRequests = { leads:createAdminRequestState(),users:createAdminRequestState(),monitoring:createAdminRequestState() };
+function isAbortError(error) { return error?.name === 'AbortError'; }
+function runAdminRequest(state,silent,task) {
+  if(state.promise){
+    if(silent) return state.promise;
+    state.controller?.abort();
+  }
+  const controller=new AbortController();
+  const token=state.token+1;
+  state.token=token;
+  state.controller=controller;
+  const isCurrent=()=>state.token===token;
+  const promise=(async()=>{
+    try { return await task(controller.signal,isCurrent); }
+    finally { if(isCurrent()){ state.promise=null; state.controller=null; } }
+  })();
+  state.promise=promise;
+  return promise;
+}
+async function api(path,payload,method,options={}) {
   const requestMethod=method || (payload?'POST':'GET');
   const hasBody=payload!==undefined && requestMethod!=='GET';
-  const response=await fetch(path,{ method:requestMethod,credentials:'same-origin',headers:hasBody?{ 'content-type':'application/json' }:undefined,body:hasBody?JSON.stringify(payload):undefined });
+  const response=await fetch(path,{ method:requestMethod,credentials:'same-origin',signal:options.signal,headers:hasBody?{ 'content-type':'application/json' }:undefined,body:hasBody?JSON.stringify(payload):undefined });
   const raw=await response.text();
   let result;
   try { result=JSON.parse(raw); }
   catch { throw new Error(response.ok?'Respons server portal tidak valid.':`Server portal sedang tidak tersedia (${response.status}). Coba kembali beberapa saat lagi.`); }
   if(!response.ok){
-    if(response.status===401 && isAdminView && path!=='/api/admin/login'){
-      clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer);
-      show('login');
-      $('#login-screen .admin-login-card > p').textContent='Sesi admin berakhir setelah 3 jam. Silakan masuk kembali untuk melanjutkan.';
-    }
-    throw new Error(result.error || 'Permintaan gagal.');
+    if(response.status===401 && isAdminView && path!=='/api/admin/login') endAdminSession();
+    // `null` is valid JSON, so a parsed body can still be null here.
+    throw new Error(result?.error || 'Permintaan gagal.');
   }
   return result;
+}
+function endAdminSession(message='Sesi admin berakhir setelah 3 jam. Silakan masuk kembali untuk melanjutkan.') {
+  clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer);
+  show('login');
+  const copy=$('#login-screen .admin-login-card > p');
+  if(copy) copy.textContent=message;
+}
+function assertDownloadSession(response,failureMessage) {
+  if(response.status===401){ endAdminSession(); throw new Error('Sesi admin telah berakhir. Silakan masuk kembali.'); }
+  if(!response.ok) throw new Error(failureMessage);
 }
 function handleAuthorization(result, fallback) { if (result?.authorization?.mode === 'redirect') { location.assign(result.authorization.url); return; } fallback(); }
 let portalSettings = {};
@@ -321,6 +352,15 @@ function setPortalEditorDirty(dirty=true) {
   status.textContent=dirty ? 'Perubahan belum diterbitkan':'Semua perubahan sudah terbit';
   status.classList.toggle('dirty',dirty);
 }
+// Leaving the settings tab, logging out, or closing the window used to discard
+// every unpublished portal edit without a single warning.
+function confirmDiscardPortalEditor() {
+  if(!portalEditorState.dirty) return true;
+  const discard=confirm('Perubahan konten portal belum diterbitkan.\n\nTinggalkan halaman ini dan buang seluruh perubahan tersebut?');
+  if(discard) setPortalEditorDirty(false);
+  return discard;
+}
+window.addEventListener('beforeunload',event=>{ if(!portalEditorState.dirty) return; event.preventDefault(); event.returnValue=''; });
 function syncPortalEditorForm() {
   const form=$('#portal-content-form');
   if(!form) return;
@@ -331,7 +371,9 @@ function syncPortalEditorForm() {
   form.elements.announcement_enabled.checked=!!profile.announcement_enabled;
   $('.announcement-editor').classList.toggle('enabled',!!profile.announcement_enabled);
   const descriptionCount=form.querySelector('[data-count-for="description"]');
-  descriptionCount.textContent=`${profile.description.length} / 700`;
+  // The server returns null for portal text without a fallback, and object
+  // spread keeps that null instead of falling back to the default.
+  if(descriptionCount) descriptionCount.textContent=`${(profile.description || '').length} / 700`;
   renderPortalPromoEditor();
   renderPortalLivePreview();
 }
@@ -420,12 +462,10 @@ const leads = [];
 let networkCatalog = { projects:[], gateways:[], portalNetworks:[], blockedGateways:[] };
 const adminScope = { projectId:'', gatewayId:'' };
 const adminTable = { page:1, limit:10, category:'all', search:'', total:0, totalPages:1 };
-const adminMonitoring = { range:'24h', loading:false };
+const adminMonitoring = { range:'24h' };
 const adminReport = { period:'weekly',loading:false,data:null };
 const adminUsers = { page:1, limit:10, verification:'all', search:'', total:0, totalPages:1 };
 const registeredUsers = [];
-let leadsLoading = false;
-let usersLoading = false;
 function scopeQuery(extra={}) {
   const params = new URLSearchParams();
   if (adminScope.gatewayId) params.set('gatewayId',adminScope.gatewayId);
@@ -452,7 +492,7 @@ function closeForgotPassword() { forgotPasswordReturn === 'userLogin' ? showUser
 function showAccountStatus(title, message, success=true) { $('#account-status-title').textContent=title; $('#account-status-message').textContent=message; $('#account-status-eyebrow').textContent=success ? 'Akun berhasil diperbarui' : 'Tautan tidak dapat diproses'; $('#account-status-icon').textContent=success ? '✓' : '!'; $('#account-status-icon').classList.toggle('error',!success); show('accountStatus'); }
 function clearAccountActionUrl() { history.replaceState({},'',location.pathname); }
 function startDestinationRedirect() { clearInterval(redirectTimer); let seconds=3; $('#redirect-countdown').textContent=seconds; redirectTimer=setInterval(()=>{ seconds-=1; $('#redirect-countdown').textContent=Math.max(seconds,0); if (seconds <= 0) { clearInterval(redirectTimer); location.assign(destinationUrl); } },1000); }
-function connectToWifi(withLead) {
+function applyConnectedCopy(withLead) {
   const profile=normalizedPortalProfiles(portalSettings)[withLead?'account':'free'];
   const english=profile.language==='en';
   $('#success-screen .eyebrow').textContent=english?'Connected successfully':'Berhasil terhubung';
@@ -463,9 +503,15 @@ function connectToWifi(withLead) {
   $('#success-screen .connected-to small').textContent=english?'Connected to network':'Terhubung ke jaringan';
   $('#success-screen .redirect-status p').innerHTML=english?'Opening PerumNet in <b id="redirect-countdown">3</b> seconds…':'Menuju PerumNet dalam <b id="redirect-countdown">3</b> detik…';
   setLeadingCopy('#browse-button',english?'Open PerumNet Now':'Buka PerumNet Sekarang');
+}
+function connectToWifi(withLead) {
+  applyConnectedCopy(withLead);
   show('success'); startDestinationRedirect();
 }
 const isConnectedCallback = new URLSearchParams(location.search).get('connected') === '1';
+// The success screen is painted immediately, but its language only becomes
+// known once /api/settings resolves, so the copy is re-applied afterwards.
+let connectedCallbackAccess = null;
 if (isGatewayReviewView) {
   const gatewayStatus=pageParams.get('status');
   if(gatewayStatus==='blocked'){
@@ -474,7 +520,7 @@ if (isGatewayReviewView) {
   }
   show('gatewayReview');
 }
-else if (isConnectedCallback) connectToWifi(!isFreeView);
+else if (isConnectedCallback) { connectedCallbackAccess=!isFreeView; connectToWifi(connectedCallbackAccess); }
 else if (isFreeView) show('free');
 const escapeHtml = value => String(value ?? '—').replace(/[&<>'"]/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
 const formatTime = value => value ? new Date(value).toLocaleString('id-ID', { dateStyle:'medium', timeStyle:'short' }) : '—';
@@ -655,7 +701,7 @@ function renderAdminMonitoring(result) {
   $('#ssid-period-label').textContent=result.range_label;
   $('#user-period-label').textContent=`Top 12 · ${result.range_label}`;
   const source=$('#monitoring-source-status');
-  source.textContent=result.has_history ? `${result.sample_count.toLocaleString('id-ID')} sampel counter · histori disimpan ${result.retention_days} hari` : 'Grafik akan terisi setelah gateway mengirim callback counter.';
+  source.textContent=result.has_history ? `${Number(result.sample_count || 0).toLocaleString('id-ID')} sampel counter · histori disimpan ${result.retention_days} hari` : 'Grafik akan terisi setelah gateway mengirim callback counter.';
   source.classList.toggle('has-history',!!result.has_history);
   $('#monitoring-updated-at').textContent=`Diperbarui ${new Date(result.generated_at).toLocaleTimeString('id-ID',{ hour:'2-digit',minute:'2-digit',second:'2-digit' })}`;
   renderGlobalTrafficChart(result.timeline,result.has_history);
@@ -663,11 +709,16 @@ function renderAdminMonitoring(result) {
   renderUserUsageChart(result.users);
 }
 async function loadAdminMonitoring({ silent=false }={}) {
-  if(!isAdminView || adminMonitoring.loading) return;
-  adminMonitoring.loading=true;
-  try { const result=await api(`/api/admin/monitoring${scopeQuery({ range:adminMonitoring.range })}`); renderAdminMonitoring(result); updateMonitoringStatus('live'); }
-  catch(error){ updateMonitoringStatus('error'); if(!silent) throw error; }
-  finally { adminMonitoring.loading=false; }
+  if(!isAdminView) return;
+  try {
+    await runAdminRequest(adminRequests.monitoring,silent,async(signal,isCurrent)=>{
+      const requestedRange=adminMonitoring.range;
+      const result=await api(`/api/admin/monitoring${scopeQuery({ range:requestedRange })}`,undefined,undefined,{ signal });
+      if(!isCurrent() || adminMonitoring.range!==requestedRange) return;
+      renderAdminMonitoring(result); updateMonitoringStatus('live');
+    });
+  }
+  catch(error){ if(isAbortError(error)) return; updateMonitoringStatus('error'); if(!silent) throw error; }
 }
 function renderReportDailyChart(targetId,rows=[],field='total_bytes',formatter=formatBytes) {
   const target=$(`#${targetId}`);
@@ -713,32 +764,38 @@ function updateMonitoringStatus(state='live') {
   status.querySelector('small').textContent=state==='error' ? 'Sinkronisasi terputus' : `Diperbarui ${new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
 }
 async function loadAdminLeads({ silent=false }={}) {
-  if (leadsLoading) return;
-  leadsLoading=true;
+  if(!isAdminView) return;
   try {
-    const result = await api(`/api/admin/clients${scopeQuery({ page:adminTable.page,limit:adminTable.limit,category:adminTable.category,search:adminTable.search })}`);
-    const { clients,stats,categories,pagination }=result;
-    leads.splice(0, leads.length, ...clients.map(row => ({
-      name:row.full_name || (row.category === 'free' ? 'Pengguna Free' : 'Perangkat belum login'), email:row.email || row.mac_address,
-      ip:row.client_ip || '—', ssid:row.ssid || '—', mac:row.mac_address,
-      time:formatTime(row.last_seen_at), initials:row.full_name ? row.full_name.split(' ').slice(0,2).map(part => part[0]).join('') : row.category === 'free' ? 'FR' : 'Wi',
-      phone:row.phone_number || '—', address:row.address || '—', registered:!!row.email, category:row.category || 'pending',
-      type:row.auth_status === 'pending' && row.authorized_until ? 'offline' : row.access_type === 'high_speed' ? 'high' : row.access_type === 'limited' ? 'limited' : 'pending', verified:!!row.is_verified,
-      status:row.auth_status, gatewayId:row.gateway_id, gateway:row.gateway_name || row.gateway_id,
-      gatewayLocation:row.gateway_location || '—', projectId:row.project_id, project:row.project_name || '—',
-      incomingBps:row.incoming_bps,outgoingBps:row.outgoing_bps,incomingBytes:row.incoming_bytes || 0,outgoingBytes:row.outgoing_bytes || 0,
-      totalUsage:row.total_usage_bytes || 0,durationSeconds:row.duration_seconds || 0,telemetryStatus:row.telemetry_status || 'waiting'
-    })));
-    Object.assign(adminTable,pagination);
-    $('#total-leads').textContent = stats.total;
-    $('#today-leads').textContent = stats.today;
-    $('#authorized-leads').textContent = stats.authorized;
-    ['all','online','account','free','pending'].forEach(key=>{ $(`#category-count-${key}`).textContent=categories[key] || 0; });
-    renderLeads(); updateMonitoringStatus('live'); updateTableRefreshStatus('live'); updateAdminRefreshStatus('live');
+    await runAdminRequest(adminRequests.leads,silent,async(signal,isCurrent)=>{
+      const requestedPage=adminTable.page,requestedCategory=adminTable.category,requestedSearch=adminTable.search;
+      const result = await api(`/api/admin/clients${scopeQuery({ page:requestedPage,limit:adminTable.limit,category:requestedCategory,search:requestedSearch })}`,undefined,undefined,{ signal });
+      // A response that lost the race must never overwrite the page, category, or
+      // search the admin has already moved on to.
+      if(!isCurrent() || adminTable.page!==requestedPage || adminTable.category!==requestedCategory || adminTable.search!==requestedSearch) return;
+      const clients=result?.clients || [],stats=result?.stats || {},categories=result?.categories || {},pagination=result?.pagination || {};
+      leads.splice(0, leads.length, ...clients.map(row => ({
+        name:row.full_name || (row.category === 'free' ? 'Pengguna Free' : 'Perangkat belum login'), email:row.email || row.mac_address,
+        ip:row.client_ip || '—', ssid:row.ssid || '—', mac:row.mac_address,
+        time:formatTime(row.last_seen_at), initials:row.full_name ? row.full_name.split(' ').slice(0,2).map(part => part[0]).join('') : row.category === 'free' ? 'FR' : 'Wi',
+        phone:row.phone_number || '—', address:row.address || '—', registered:!!row.email, category:row.category || 'pending',
+        type:row.auth_status === 'pending' && row.authorized_until ? 'offline' : row.access_type === 'high_speed' ? 'high' : row.access_type === 'limited' ? 'limited' : 'pending', verified:!!row.is_verified,
+        status:row.auth_status, gatewayId:row.gateway_id, gateway:row.gateway_name || row.gateway_id,
+        gatewayLocation:row.gateway_location || '—', projectId:row.project_id, project:row.project_name || '—',
+        incomingBps:row.incoming_bps,outgoingBps:row.outgoing_bps,incomingBytes:row.incoming_bytes || 0,outgoingBytes:row.outgoing_bytes || 0,
+        totalUsage:row.total_usage_bytes || 0,durationSeconds:row.duration_seconds || 0,telemetryStatus:row.telemetry_status || 'waiting'
+      })));
+      Object.assign(adminTable,pagination);
+      $('#total-leads').textContent = stats.total ?? 0;
+      $('#today-leads').textContent = stats.today ?? 0;
+      $('#authorized-leads').textContent = stats.authorized ?? 0;
+      ['all','online','account','free','pending'].forEach(key=>{ $(`#category-count-${key}`).textContent=categories[key] || 0; });
+      renderLeads(); updateMonitoringStatus('live'); updateTableRefreshStatus('live'); updateAdminRefreshStatus('live');
+    });
   } catch(error) {
+    if(isAbortError(error)) return;
     updateMonitoringStatus('error');
     if(!silent) throw error;
-  } finally { leadsLoading=false; }
+  }
 }
 function renderLeads() {
   const access = { high:'High Speed', limited:'Limited', pending:'Menunggu login', offline:'Offline' };
@@ -756,11 +813,11 @@ function renderLeads() {
 }
 function renderRegisteredUsers() {
   $('#profile-rows').innerHTML=registeredUsers.map(user=>{
-    const initials=user.full_name.split(/\s+/).slice(0,2).map(part=>part[0]).join('').toUpperCase();
+    const initials=String(user.full_name || '').trim().split(/\s+/).filter(Boolean).slice(0,2).map(part=>part[0]).join('').toUpperCase();
     const activity=user.last_seen_at
       ? `<span class="profile-activity"><b>${escapeHtml(relativeTime(user.last_seen_at))}</b><small>${escapeHtml(user.project_name || 'Project tidak tersedia')} · ${escapeHtml(user.gateway_name || 'Gateway tidak tersedia')}</small><em>${Number(user.device_count || 0)} perangkat · ${Number(user.login_count || 0)} login</em></span>`
       : '<span class="profile-activity empty"><b>Belum pernah login</b><small>Akun belum terhubung ke perangkat</small></span>';
-    return `<tr><td data-label="Nama"><div class="profile-user-cell"><span class="avatar">${escapeHtml(initials || 'PN')}</span><div><b>${escapeHtml(user.full_name)}</b><small>ID ${escapeHtml(user.id.slice(0,8))}</small></div></div></td><td data-label="Email"><span class="profile-email">${escapeHtml(user.email)}</span></td><td data-label="Nomor HP">${escapeHtml(user.phone_number)}</td><td data-label="Alamat" class="profile-address-cell">${escapeHtml(user.address)}</td><td data-label="Verifikasi"><span class="verification-badge ${user.is_verified ? 'verified':'unverified'}">${user.is_verified ? '✓ Terverifikasi':'! Perlu ditinjau'}</span></td><td data-label="Aktivitas">${activity}</td><td data-label="Terdaftar">${escapeHtml(formatTime(user.created_at))}</td><td data-label="Aksi"><div class="profile-row-actions"><button class="edit-profile" type="button" data-user-id="${escapeHtml(user.id)}">Edit</button><button class="delete-profile" type="button" data-user-id="${escapeHtml(user.id)}">Hapus</button></div></td></tr>`;
+    return `<tr><td data-label="Nama"><div class="profile-user-cell"><span class="avatar">${escapeHtml(initials || 'PN')}</span><div><b>${escapeHtml(user.full_name)}</b><small>ID ${escapeHtml(String(user.id || '').slice(0,8))}</small></div></div></td><td data-label="Email"><span class="profile-email">${escapeHtml(user.email)}</span></td><td data-label="Nomor HP">${escapeHtml(user.phone_number)}</td><td data-label="Alamat" class="profile-address-cell">${escapeHtml(user.address)}</td><td data-label="Verifikasi"><span class="verification-badge ${user.is_verified ? 'verified':'unverified'}">${user.is_verified ? '✓ Terverifikasi':'! Perlu ditinjau'}</span></td><td data-label="Aktivitas">${activity}</td><td data-label="Terdaftar">${escapeHtml(formatTime(user.created_at))}</td><td data-label="Aksi"><div class="profile-row-actions"><button class="edit-profile" type="button" data-user-id="${escapeHtml(user.id)}">Edit</button><button class="delete-profile" type="button" data-user-id="${escapeHtml(user.id)}">Hapus</button></div></td></tr>`;
   }).join('') || '<tr class="empty-row"><td colspan="8" class="empty-state">Tidak ada pengguna pada pencarian atau filter ini.</td></tr>';
   const start=adminUsers.total ? (adminUsers.page-1)*adminUsers.limit+1 : 0;
   const end=Math.min(adminUsers.page*adminUsers.limit,adminUsers.total);
@@ -770,29 +827,34 @@ function renderRegisteredUsers() {
   $('#profile-page-next').disabled=adminUsers.page>=adminUsers.totalPages;
 }
 async function loadAdminUsers({ silent=false }={}) {
-  if(!isAdminView || usersLoading) return;
-  usersLoading=true;
+  if(!isAdminView) return;
   const refreshButton=$('#users-refresh');
   try {
-    const query=new URLSearchParams({ page:String(adminUsers.page),limit:String(adminUsers.limit),verification:adminUsers.verification });
-    if(adminUsers.search) query.set('search',adminUsers.search);
-    const result=await api(`/api/admin/users?${query}`);
-    registeredUsers.splice(0,registeredUsers.length,...result.users);
-    Object.assign(adminUsers,result.pagination);
-    $('#profile-total').textContent=result.stats.total;
-    $('#profile-verified').textContent=result.stats.verified;
-    $('#profile-unverified').textContent=result.stats.unverified;
-    $('#profile-sync-status').textContent=`Sinkron ${refreshClock()}`;
-    $('#profile-sync-status').classList.remove('error');
-    renderRegisteredUsers();
-    updateAdminRefreshStatus('live');
+    await runAdminRequest(adminRequests.users,silent,async(signal,isCurrent)=>{
+      const requestedPage=adminUsers.page,requestedVerification=adminUsers.verification,requestedSearch=adminUsers.search;
+      const query=new URLSearchParams({ page:String(requestedPage),limit:String(adminUsers.limit),verification:requestedVerification });
+      if(requestedSearch) query.set('search',requestedSearch);
+      const result=await api(`/api/admin/users?${query}`,undefined,undefined,{ signal });
+      if(!isCurrent() || adminUsers.page!==requestedPage || adminUsers.verification!==requestedVerification || adminUsers.search!==requestedSearch) return;
+      const stats=result?.stats || {};
+      registeredUsers.splice(0,registeredUsers.length,...(result?.users || []));
+      Object.assign(adminUsers,result?.pagination || {});
+      $('#profile-total').textContent=stats.total ?? 0;
+      $('#profile-verified').textContent=stats.verified ?? 0;
+      $('#profile-unverified').textContent=stats.unverified ?? 0;
+      $('#profile-sync-status').textContent=`Sinkron ${refreshClock()}`;
+      $('#profile-sync-status').classList.remove('error');
+      renderRegisteredUsers();
+      updateAdminRefreshStatus('live');
+    });
   } catch(error) {
+    if(isAbortError(error)) return;
     $('#profile-sync-status').textContent='Sinkronisasi gagal';
     $('#profile-sync-status').classList.add('error');
     if(!silent) throw error;
   } finally {
-    usersLoading=false;
-    setRefreshLoading(refreshButton,false);
+    // A preempted poll must not switch off the spinner of the request that replaced it.
+    if(!adminRequests.users.promise) setRefreshLoading(refreshButton,false);
   }
 }
 function openAdminUserEditor(user=null) {
@@ -886,8 +948,10 @@ async function loadAdminNetwork() {
   $('#network-pending-total').textContent=managedGateways().filter(gateway=>gateway.approval_status!=='approved').length;
   $('#gateway-sync-time').textContent=`Disinkronkan ${new Date().toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit'})}`;
 }
+function activeAdminTab() { return document.querySelector('.tab-content.active')?.id.replace(/-tab$/,'') || ''; }
 function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
   const tab=['leads','users','network','settings'].includes(requestedTab) ? requestedTab : 'leads';
+  if(tab!=='settings' && activeAdminTab()==='settings' && !confirmDiscardPortalEditor()) return;
   document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.tab===tab));
   document.querySelectorAll('.tab-content').forEach(content=>content.classList.toggle('active',content.id===`${tab}-tab`));
   $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab];
@@ -900,7 +964,7 @@ function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
   setSidebar(false);
 }
 renderLeads();
-loadPortalSettings();
+loadPortalSettings().finally(()=>{ if(connectedCallbackAccess!==null) applyConnectedCopy(connectedCallbackAccess); });
 async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; $('#admin-email').title=`Sesi berakhir ${new Date(session.expiresAt).toLocaleString('id-ID')}`; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadAdminReport(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); activateAdminTab(location.hash.slice(1) || 'leads',{ updateHash:false }); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
@@ -919,7 +983,7 @@ $('#account-status-action').onclick = () => location.assign(destinationUrl);
 $('#resend-verification').onclick = async e => { const feedback=$('#verification-status'); if (!pendingVerificationEmail) { feedback.textContent='Kembali ke formulir lalu masukkan ulang data pendaftaran.'; return; } e.currentTarget.disabled=true; feedback.textContent='Mengirim ulang email…'; try { const result=await api('/api/auth/resend',{ email:pendingVerificationEmail }); feedback.textContent=result.message; } catch(error) { feedback.textContent=error.message; } finally { e.currentTarget.disabled=false; } }; $('#back-from-verify').onclick = showAccessChoice;
 $('#browse-button').onclick = () => { clearInterval(redirectTimer); location.assign(destinationUrl); };
 $('#back-portal').onclick = () => location.assign('/');
-$('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'); try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } }); $('#logout').onclick = async () => { clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
+$('#login-form').addEventListener('submit', async e => { e.preventDefault(); const fields = e.currentTarget.querySelectorAll('input'), button = e.currentTarget.querySelector('button'); if (button?.disabled) return; if (button) button.disabled=true; try { await api('/api/admin/login', { email:fields[0].value, password:fields[1].value }); location.replace('/admin'); } catch (error) { alert(error.message); } finally { if (button) button.disabled=false; } }); $('#logout').onclick = async () => { if (!confirmDiscardPortalEditor()) return; clearInterval(notificationTimer); clearInterval(monitoringTimer); clearInterval(analyticsTimer); try { await api('/api/admin/logout', {}); } finally { location.assign('/'); } };
 function setWorkspaceMenu(open) { $('.workspace-switcher').classList.toggle('open',open); $('#workspace-toggle').setAttribute('aria-expanded',String(open)); }
 async function applyAdminScope(projectId='',gatewayId='') {
   const gateway=networkCatalog.gateways.find(item=>item.id===gatewayId);
@@ -991,7 +1055,7 @@ $('#blocked-gateway-list').addEventListener('click',async event=>{
   catch(error){ alert(error.message); button.disabled=false; }
 });
 $('#portal-network-list').addEventListener('submit',async event=>{ const form=event.target.closest('.portal-route-form'); if(!form) return; event.preventDefault(); const button=form.querySelector('button[type="submit"]'),feedback=form.querySelector('.portal-route-feedback'),data=new FormData(form),portalMode=data.get('portalMode'),networkDescription=data.get('networkDescription'); button.disabled=true; feedback.textContent='Menyimpan routing…'; feedback.classList.remove('success'); try { await api('/api/admin/portal-networks',{ gatewayId:form.dataset.gatewayId,networkAlias:form.dataset.networkAlias,portalMode,networkDescription }); feedback.textContent='Routing dan deskripsi VLAN tersimpan.'; feedback.classList.add('success'); await loadAdminNetwork(); } catch(error){ feedback.textContent=error.message; } finally { button.disabled=false; } });
-$('#search-input').addEventListener('input', event => { clearTimeout(searchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; searchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
+$('#search-input').addEventListener('input', event => { clearTimeout(leadSearchTimer); adminTable.search=event.target.value.trim(); adminTable.page=1; leadSearchTimer=setTimeout(()=>loadAdminLeads().catch(error=>alert(error.message)),280); });
 $('#category-filter').addEventListener('click',event=>{ const button=event.target.closest('[data-category]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#category-filter [data-category]').forEach(item=>item.classList.toggle('active',item===button)); adminTable.category=button.dataset.category; adminTable.page=1; loadAdminLeads().catch(error=>alert(error.message)); });
 $('#monitoring-range').addEventListener('click',event=>{ const button=event.target.closest('[data-range]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#monitoring-range [data-range]').forEach(item=>item.classList.toggle('active',item===button)); adminMonitoring.range=button.dataset.range; loadAdminMonitoring().catch(error=>alert(error.message)); });
 $('#report-period').addEventListener('click',event=>{ const button=event.target.closest('[data-report-period]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#report-period [data-report-period]').forEach(item=>item.classList.toggle('active',item===button)); adminReport.period=button.dataset.reportPeriod; loadAdminReport().catch(error=>alert(error.message)); });
@@ -1000,8 +1064,7 @@ $('#export-report-pdf').onclick=async event=>{
   button.disabled=true; button.textContent='Menyiapkan PDF…';
   try {
     const response=await fetch(`/api/admin/reports.pdf${scopeQuery({ period:adminReport.period })}`,{ credentials:'same-origin' });
-    if(response.status===401){ show('login'); throw new Error('Sesi admin telah berakhir. Silakan masuk kembali.'); }
-    if(!response.ok) throw new Error('Laporan PDF tidak dapat dibuat.');
+    assertDownloadSession(response,'Laporan PDF tidak dapat dibuat.');
     const disposition=response.headers.get('content-disposition') || '';
     const filename=disposition.match(/filename="?([^";]+)"?/i)?.[1] || `laporan-jaringan-perumnet-${adminReport.period}.pdf`;
     const href=URL.createObjectURL(await response.blob()),anchor=document.createElement('a');
@@ -1016,9 +1079,9 @@ $('#page-next').onclick=()=>{ if(adminTable.page>=adminTable.totalPages) return;
 $('#table-refresh').onclick=()=>refreshTableData().catch(error=>alert(error.message));
 $('#add-admin-user').onclick=()=>openAdminUserEditor();
 document.querySelectorAll('[data-close-user-editor]').forEach(button=>button.onclick=closeAdminUserEditor);
-$('#users-refresh').onclick=event=>{ if(usersLoading) return; setRefreshLoading(event.currentTarget,true); loadAdminUsers().catch(error=>alert(error.message)); };
+$('#users-refresh').onclick=event=>{ setRefreshLoading(event.currentTarget,true); loadAdminUsers().catch(error=>alert(error.message)); };
 $('#profile-verification-filter').onclick=event=>{ const button=event.target.closest('[data-verification]'); if(!button || button.classList.contains('active')) return; document.querySelectorAll('#profile-verification-filter [data-verification]').forEach(item=>item.classList.toggle('active',item===button)); adminUsers.verification=button.dataset.verification; adminUsers.page=1; loadAdminUsers().catch(error=>alert(error.message)); };
-$('#profile-search').oninput=event=>{ clearTimeout(searchTimer); adminUsers.search=event.target.value.trim(); adminUsers.page=1; searchTimer=setTimeout(()=>loadAdminUsers().catch(error=>alert(error.message)),280); };
+$('#profile-search').oninput=event=>{ clearTimeout(userSearchTimer); adminUsers.search=event.target.value.trim(); adminUsers.page=1; userSearchTimer=setTimeout(()=>loadAdminUsers().catch(error=>alert(error.message)),280); };
 $('#profile-page-size').onchange=event=>{ adminUsers.limit=Number(event.target.value)||10; adminUsers.page=1; loadAdminUsers().catch(error=>alert(error.message)); };
 $('#profile-page-prev').onclick=()=>{ if(adminUsers.page<=1) return; adminUsers.page-=1; loadAdminUsers().catch(error=>alert(error.message)); };
 $('#profile-page-next').onclick=()=>{ if(adminUsers.page>=adminUsers.totalPages) return; adminUsers.page+=1; loadAdminUsers().catch(error=>alert(error.message)); };
@@ -1058,7 +1121,7 @@ $('#users-export-csv').onclick=async event=>{
   const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…';
   try {
     const response=await fetch('/api/admin/export.csv',{ credentials:'same-origin' });
-    if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.');
+    assertDownloadSession(response,'File CSV tidak dapat dibuat. Silakan login ulang.');
     const href=URL.createObjectURL(await response.blob()),anchor=document.createElement('a');
     anchor.href=href; anchor.download='database-pengguna-perumnet.csv'; anchor.click();
     setTimeout(()=>URL.revokeObjectURL(href),1000);
@@ -1066,7 +1129,7 @@ $('#users-export-csv').onclick=async event=>{
   finally { button.disabled=false; button.textContent=old; }
 };
 $('#lead-rows').addEventListener('click', async event => { const button=event.target.closest('.delete-client'); if (!button) return; const lead=leads.find(item=>item.mac===button.dataset.mac && item.gatewayId===button.dataset.gateway); if (!lead) return; const detail=lead.registered ? 'Akun, profil, seluruh perangkat terkait, histori monitoring, dan riwayat akses akan dihapus.' : `Perangkat, histori monitoring, dan riwayat one-click pada ${lead.gateway} akan dihapus.`; if (!confirm(`Hapus data ${lead.name}?\n\n${detail}\nOtorisasi WiFiDog juga akan dicabut.`)) return; button.disabled=true; try { const result=await api('/api/admin/clients',{ gatewayId:lead.gatewayId,macAddress:lead.mac },'DELETE'); await Promise.all([loadAdminNetwork(),loadAdminLeads(),loadAdminUsers(),loadAdminMonitoring(),loadNotifications()]); alert(result.deletedAccount ? 'Akun berhasil dihapus dan akses Ruijie dicabut.' : 'Data perangkat berhasil dihapus dan akses Ruijie dicabut.'); } catch(error) { alert(error.message); button.disabled=false; } });
-$('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); if(!response.ok) throw new Error('File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
+$('#export-csv').onclick = async event => { const button=event.currentTarget,old=button.textContent; button.disabled=true; button.textContent='Menyiapkan CSV…'; try { const response=await fetch(`/api/admin/export.csv${scopeQuery()}`,{ credentials:'same-origin' }); assertDownloadSession(response,'File CSV tidak dapat dibuat. Silakan login ulang.'); const href=URL.createObjectURL(await response.blob()),a=document.createElement('a'); a.href=href; a.download=`pengguna-terdaftar-perumnet-${adminScope.gatewayId || adminScope.projectId || 'semua'}.csv`; a.click(); setTimeout(()=>URL.revokeObjectURL(href),1000); } catch(error){ alert(error.message); } finally { button.disabled=false; button.textContent=old; } };
 $('#portal-profile-tabs').onclick=event=>{
   const button=event.target.closest('[data-profile]');
   if(!button || button.dataset.profile===portalEditorState.activeProfile) return;
@@ -1146,8 +1209,9 @@ $('#portal-content-form').addEventListener('submit',async event=>{
   event.preventDefault();
   const button=$('#save-portal-content'),old=button.innerHTML;
   const account=portalEditorState.profiles.account,free=portalEditorState.profiles.free;
-  if(!account.ssid.trim() || !free.ssid.trim()){ alert('SSID Portal Akun dan Portal Free wajib diisi.'); return; }
-  if(account.ssid.trim().toLowerCase()===free.ssid.trim().toLowerCase()){ alert('SSID Portal Akun dan Portal Free harus berbeda.'); return; }
+  const accountSsidValue=String(account.ssid || '').trim(),freeSsidValue=String(free.ssid || '').trim();
+  if(!accountSsidValue || !freeSsidValue){ alert('SSID Portal Akun dan Portal Free wajib diisi.'); return; }
+  if(accountSsidValue.toLowerCase()===freeSsidValue.toLowerCase()){ alert('SSID Portal Akun dan Portal Free harus berbeda.'); return; }
   button.disabled=true; button.innerHTML='Menerbitkan…';
   try {
     const result=await api('/api/admin/portal-content',{
