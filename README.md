@@ -39,9 +39,23 @@ Gateway yang dihapus masuk ke daftar blokir agar ID yang sama tidak dapat mendaf
 
 Database versi lama dimigrasikan otomatis saat aplikasi pertama kali dijalankan. Sebelum upgrade produksi, tetap buat salinan `data/portal.db`; deployment VPS pada project ini melakukan backup tersebut sebelum proses PM2 direstart.
 
+## Arsitektur deployment
+
+Produksi berjalan di VPS dengan PM2 (proses `perumnet-captive`) pada direktori `~/apps/captive-perumnet`, memakai Node 22 dari `~/.local/node-v22/bin/node`. Direktori itu bukan clone git, sehingga pembaruan dilakukan dengan menyalin berkas, bukan `git pull`.
+
+Trafik pelanggan tidak melewati nginx:
+
+```
+pelanggan → Cloudflare (terminasi TLS) → cloudflared → aplikasi :3001
+```
+
+nginx di VPS hanya menjalankan konfigurasi `default` bawaan dan tidak meneruskan apa pun ke aplikasi. Berkas di `deploy/nginx/` **tidak terpasang** dan hanya disimpan sebagai referensi bila suatu saat tunnel dilepas. Karena TLS ditangani Cloudflare, pengalihan `http://` ke `https://` juga harus diatur di sana (**SSL/TLS → Edge Certificates → Always Use HTTPS**), bukan di server.
+
+Server menjalankan beberapa aplikasi lain, jadi gunakan `pm2 restart perumnet-captive` — jangan `pm2 restart all`.
+
 ## Keamanan
 
-Server hanya menyajikan daftar file yang diizinkan (`index.html`, `app.js`, `styles.css`, dan `assets/`). Direktori `data/`, berkas `.env`, source code, serta metadata git tidak pernah dapat diunduh melalui HTTP. Konfigurasi nginx pada `deploy/nginx/` menambahkan lapisan kedua berupa `deny` untuk path tersebut.
+Server hanya menyajikan daftar file yang diizinkan (`index.html`, `app.js`, `styles.css`, dan `assets/`). Direktori `data/`, berkas `.env`, source code, serta metadata git tidak pernah dapat diunduh melalui HTTP. Perlindungan ini sepenuhnya berada di aplikasi dan tidak bergantung pada reverse proxy di depannya.
 
 Saat `NODE_ENV=production`, aplikasi menolak start bila `SESSION_SECRET`, `ADMIN_PASSWORD`, atau `ADMIN_EMAIL` masih bernilai default, atau bila `SESSION_SECRET` kurang dari 32 karakter. Buat nilainya dengan `openssl rand -hex 32`.
 
