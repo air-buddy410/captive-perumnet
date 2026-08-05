@@ -2185,17 +2185,17 @@ const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; chars
 // Only these files may ever leave the web root. Serving the directory verbatim
 // exposed data/portal.db, .env and the .git directory to unauthenticated callers.
 const servableFiles = new Set(['/index.html', '/app.js', '/styles.css']);
-const servableAsset = pathname => /^\/assets\/[a-zA-Z0-9._-]+\.(?:png|jpe?g|webp|svg|ico)$/.test(pathname) && !pathname.includes('..');
+const servableAsset = pathname => /^\/assets\/(?:fonts\/)?[a-zA-Z0-9._-]+\.(?:png|jpe?g|webp|svg|ico|woff2)$/.test(pathname) && !pathname.includes('..');
 const portalEntryPoints = new Set(['/', '/admin', '/admin/', '/free', '/free/', '/gateway-review', '/gateway-review/']);
 // script-src stays strict because index.html loads no inline script; style-src
 // needs unsafe-inline for the chart bars app.js renders as style attributes.
 const contentSecurityPolicy = [
   "default-src 'self'",
   "script-src 'self'",
-  // index.html memuat DM Sans dan Plus Jakarta Sans dari Google Fonts. Tanpa dua
-  // baris ini CSP memblokirnya dan portal jatuh ke font sistem.
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' data: https://fonts.gstatic.com",
+  // Webfont kini disajikan dari domain sendiri, jadi tidak ada host luar yang
+  // perlu diizinkan untuk style maupun font.
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
   "img-src 'self' data: https:",
   "connect-src 'self'",
   "form-action 'self'",

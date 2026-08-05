@@ -48,14 +48,22 @@ try {
   assert(shell.headers.get('x-frame-options') === 'DENY', 'Dashboard admin tidak boleh dapat di-iframe.');
   assert(/frame-ancestors 'none'/.test(shell.headers.get('content-security-policy') || ''), 'CSP harus melarang framing.');
   assert(/script-src 'self'/.test(shell.headers.get('content-security-policy') || ''), 'CSP harus membatasi sumber script.');
-  // index.html memuat webfont dari Google. CSP yang lupa mengizinkannya membuat
-  // portal diam-diam jatuh ke font sistem tanpa error yang terlihat pengguna.
+  // Webfont pernah diam-diam gagal dimuat karena CSP tidak mengizinkan sumbernya,
+  // dan portal jatuh ke font sistem tanpa error yang terlihat pengguna. Kaitkan
+  // kebijakan dengan apa yang benar-benar diminta halaman supaya keduanya tidak
+  // bisa berbeda lagi.
   const policy = shell.headers.get('content-security-policy') || '';
   const html = await (await fetch(`${baseUrl}/`)).text();
-  for (const [host, directive] of [['fonts.googleapis.com','style-src'],['fonts.gstatic.com','font-src']]) {
-    if (!html.includes(host) && directive === 'style-src') continue;
-    const rule = policy.split(';').map(part => part.trim()).find(part => part.startsWith(directive));
-    assert(rule && rule.includes(host), `CSP ${directive} harus mengizinkan ${host} selama index.html memuat webfont.`);
+  const externalFontHosts = [...html.matchAll(/https:\/\/(fonts\.googleapis\.com|fonts\.gstatic\.com)/g)].map(match => match[1]);
+  for (const host of new Set(externalFontHosts)) {
+    assert(policy.includes(host), `CSP harus mengizinkan ${host} selama index.html masih memuatnya.`);
+  }
+  // Font lokal harus benar-benar tersaji, bukan hanya dideklarasikan di CSS.
+  for (const font of ['/assets/fonts/dm-sans-latin.woff2','/assets/fonts/plus-jakarta-sans-latin.woff2']) {
+    const response = await fetch(`${baseUrl}${font}`);
+    assert(response.ok, `Berkas font ${font} harus dapat diakses (status ${response.status}).`);
+    const head = Buffer.from(await response.arrayBuffer()).subarray(0, 4).toString('latin1');
+    assert(head === 'wOF2', `Berkas font ${font} harus berupa woff2 yang valid.`);
   }
 
   const oversized = await fetch(`${baseUrl}/api/auth/login`, {
