@@ -298,6 +298,32 @@ const portalEnglishDefaults = {
   free:{ eyebrow:'Free access',headline:'Connect in one click.',description:'No account or personal details required. Press the button below to start using the internet.',primary_button_label:'Connect to Free Internet' }
 };
 const portalEditorState = { activeProfile:'account',profiles:{ account:{...portalContentDefaults.account},free:{...portalContentDefaults.free} },promotions:[],dirty:false };
+// Satu portal melayani dua domain. Gateway mengarahkan lokasi berpengunjung
+// asing ke domain .com, sementara .id tetap Bahasa Indonesia, jadi bahasa
+// portal mengikuti host yang dibuka pengunjung.
+const hostLanguageRules = [{ suffix:'.com', language:'en' },{ suffix:'.id', language:'id' }];
+const hostLanguage = (() => {
+  const host = location.hostname.toLowerCase().replace(/\.$/,'');
+  return hostLanguageRules.find(rule => host === rule.suffix.slice(1) || host.endsWith(rule.suffix))?.language || null;
+})();
+// Hanya teks yang masih bawaan yang ikut diterjemahkan. Kalimat yang sudah
+// diubah admin dibiarkan apa adanya karena itu pilihan kata mereka sendiri.
+const translatableProfileFields = ['eyebrow','headline','description','primary_button_label'];
+function withHostLanguage(profile, key) {
+  if (!hostLanguage || profile.language === hostLanguage) return profile;
+  const from = profile.language === 'en' ? portalEnglishDefaults[key] : portalContentDefaults[key];
+  const to = hostLanguage === 'en' ? portalEnglishDefaults[key] : portalContentDefaults[key];
+  const next = { ...profile,language:hostLanguage };
+  translatableProfileFields.forEach(field => { if (profile[field] === from[field]) next[field] = to[field]; });
+  return next;
+}
+// Dipakai hanya pada tampilan pengunjung. Studio admin sengaja memakai
+// normalizedPortalProfiles apa adanya, supaya yang diedit dan disimpan tetap
+// pengaturan asli, bukan hasil override domain.
+function publicPortalProfiles(settings=portalSettings) {
+  const profiles = normalizedPortalProfiles(settings);
+  return { account:withHostLanguage(profiles.account,'account'),free:withHostLanguage(profiles.free,'free') };
+}
 function normalizedPortalProfiles(settings={}) {
   return {
     account:{ ...portalContentDefaults.account,...(settings.profiles?.account || {}),ssid:settings.profiles?.account?.ssid || settings.account_ssid || portalContentDefaults.account.ssid },
@@ -446,7 +472,7 @@ function applyFreeLanguage(language='id') {
   $('#free-screen .free-terms').innerHTML=english?'By continuing, you agree to the <a href="#" class="terms-link" data-open-terms>PerumNet network terms of use</a>.':'Dengan melanjutkan, Anda menyetujui <a href="#" class="terms-link" data-open-terms>ketentuan penggunaan jaringan PerumNet</a>.'; applyTermsLanguage(english);
 }
 function renderPublicPortalContent() {
-  const profiles=normalizedPortalProfiles(portalSettings);
+  const profiles=publicPortalProfiles();
   const account=profiles.account,free=profiles.free;
   $('#account-eyebrow').textContent=account.eyebrow;
   $('#portal-title').textContent=account.headline;
@@ -611,7 +637,7 @@ function showAccountStatus(title, message, success=true) { $('#account-status-ti
 function clearAccountActionUrl() { history.replaceState({},'',location.pathname); }
 function startDestinationRedirect() { clearInterval(redirectTimer); let seconds=3; $('#redirect-countdown').textContent=seconds; redirectTimer=setInterval(()=>{ seconds-=1; $('#redirect-countdown').textContent=Math.max(seconds,0); if (seconds <= 0) { clearInterval(redirectTimer); location.assign(destinationUrl); } },1000); }
 function applyConnectedCopy(withLead) {
-  const profile=normalizedPortalProfiles(portalSettings)[withLead?'account':'free'];
+  const profile=publicPortalProfiles()[withLead?'account':'free'];
   const english=profile.language==='en';
   $('#success-screen .eyebrow').textContent=english?'Connected successfully':'Berhasil terhubung';
   $('#success-title').innerHTML=english?'Enjoy your<br>internet access!':'Selamat menikmati<br>WiFi gratis!';
@@ -1090,7 +1116,7 @@ if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
 $('#lead-form').addEventListener('submit', async e => { e.preventDefault(); const data = new FormData(e.currentTarget); if (![...data.values()].every(Boolean)) { $('#form-error').textContent = 'Lengkapi semua data, kata sandi, dan setujui syarat terlebih dahulu.'; return; } const button=e.currentTarget.querySelector('button'); button.disabled=true; try { const result = await api('/api/auth/register', { fullName:data.get('name'), email:data.get('email'), phone:data.get('phone'), address:data.get('address'), password:data.get('password'), consent:data.get('consent'), context:captiveContext }); $('#form-error').textContent=''; pendingVerificationEmail=result.email; $('#verification-email').textContent = result.email; show('verify'); } catch (error) { $('#form-error').textContent = error.message; } finally { button.disabled=false; } });
 $('#choose-high-speed').onclick = showLeadForm; $('#back-to-access-choice').onclick = showAccessChoice;
-$('#free-connect').onclick = async event => { const button=event.currentTarget,feedback=$('#free-feedback'),label=button.querySelector('.button-label'),profile=normalizedPortalProfiles(portalSettings).free,english=profile.language==='en'; button.disabled=true; feedback.textContent=''; label.textContent=english?'Connecting…':'Menghubungkan…'; try { const result=await api('/api/captive/limited',{ context:captiveContext }); handleAuthorization(result,()=>connectToWifi(false)); } catch(error) { feedback.textContent=error.message; button.disabled=false; label.textContent=profile.primary_button_label; } };
+$('#free-connect').onclick = async event => { const button=event.currentTarget,feedback=$('#free-feedback'),label=button.querySelector('.button-label'),profile=publicPortalProfiles().free,english=profile.language==='en'; button.disabled=true; feedback.textContent=''; label.textContent=english?'Connecting…':'Menghubungkan…'; try { const result=await api('/api/captive/limited',{ context:captiveContext }); handleAuthorization(result,()=>connectToWifi(false)); } catch(error) { feedback.textContent=error.message; button.disabled=false; label.textContent=profile.primary_button_label; } };
 $('#quick-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('button'), feedback=$('#quick-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
 $('#open-user-login').onclick = () => showUserLogin(); $('#back-from-user-login').onclick = showAccessChoice; $('#close-user-login').onclick = showAccessChoice;
 $('#user-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('.primary-button'), feedback=$('#user-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
