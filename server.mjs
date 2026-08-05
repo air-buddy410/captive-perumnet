@@ -282,6 +282,33 @@ db.prepare(`INSERT OR IGNORE INTO portal_profile_content
 db.exec(`CREATE TABLE IF NOT EXISTS admin_sessions (
   id TEXT PRIMARY KEY, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, revoked_at TEXT
 )`);
+try { db.exec('ALTER TABLE admin_sessions ADD COLUMN admin_id TEXT'); } catch { /* Kolom sudah ada. */ }
+
+// Satu kredensial admin dipakai bersama seluruh tim membuat ekspor dan
+// penghapusan data pelanggan tidak dapat ditelusuri ke siapa pun. Setiap orang
+// kini punya akunnya sendiri, dan tindakan sensitif dicatat.
+db.exec(`CREATE TABLE IF NOT EXISTS admin_users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  full_name TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'staff' CHECK(role IN ('owner','staff')),
+  created_at TEXT NOT NULL,
+  created_by TEXT,
+  disabled_at TEXT,
+  last_login_at TEXT
+)`);
+db.exec(`CREATE TABLE IF NOT EXISTS admin_audit_log (
+  id TEXT PRIMARY KEY,
+  admin_id TEXT,
+  admin_email TEXT NOT NULL,
+  action TEXT NOT NULL,
+  summary TEXT,
+  record_count INTEGER,
+  client_ip TEXT,
+  created_at TEXT NOT NULL
+)`);
+db.exec('CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)');
 
 const config = {
   port: Number(process.env.PORT || 3000),
@@ -440,21 +467,48 @@ const adminSessionSeconds = () => {
 function adminSessionSignature(encodedPayload) {
   return createHmac('sha256',config.sessionSecret).update(encodedPayload).digest('hex');
 }
-// Binding the cookie to the active credentials means rotating ADMIN_PASSWORD
-// immediately invalidates every session that was issued under the old one.
-const adminCredentialFingerprint = () =>
-  createHash('sha256').update(`${config.adminEmail} ${config.adminPassword}`).digest('hex').slice(0,32);
-function createAdminSession() {
+// Akun pemilik selalu disemai dari .env supaya tetap ada jalur pemulihan bila
+// seluruh kata sandi tim terlupakan. Mengganti ADMIN_PASSWORD memperbarui hash
+// pemilik dan mencabut sesinya, mempertahankan perilaku rotasi sebelumnya.
+function ensureBootstrapAdmin() {
+  const nowIso = new Date().toISOString();
+  const email = String(config.adminEmail).toLowerCase().trim();
+  const existing = db.prepare('SELECT id,password_hash FROM admin_users WHERE email=?').get(email);
+  if (!existing) {
+    db.prepare('INSERT INTO admin_users (id,email,full_name,password_hash,role,created_at) VALUES (?,?,?,?,?,?)')
+      .run(id(), email, 'Administrator', hashPassword(config.adminPassword), 'owner', nowIso);
+    return;
+  }
+  if (!verifyPassword(config.adminPassword, existing.password_hash)) {
+    db.prepare('UPDATE admin_users SET password_hash=?,role=?,disabled_at=NULL WHERE id=?')
+      .run(hashPassword(config.adminPassword), 'owner', existing.id);
+    db.prepare('UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL').run(nowIso, existing.id);
+  }
+}
+ensureBootstrapAdmin();
+
+function createAdminSession(admin) {
   const nowIso = new Date().toISOString();
   const expiresAt = new Date(Date.now() + adminSessionSeconds() * 1000).toISOString();
   db.prepare('DELETE FROM admin_sessions WHERE expires_at<?').run(nowIso);
   const sessionId = id();
-  db.prepare('INSERT INTO admin_sessions (id,created_at,expires_at) VALUES (?,?,?)').run(sessionId, nowIso, expiresAt);
-  const encodedPayload = Buffer.from(JSON.stringify({ jti:sessionId,email:config.adminEmail,cred:adminCredentialFingerprint(),expiresAt })).toString('base64url');
+  db.prepare('INSERT INTO admin_sessions (id,created_at,expires_at,admin_id) VALUES (?,?,?,?)').run(sessionId, nowIso, expiresAt, admin.id);
+  const encodedPayload = Buffer.from(JSON.stringify({ jti:sessionId,adminId:admin.id,email:admin.email,expiresAt })).toString('base64url');
   return { value:`${encodedPayload}.${adminSessionSignature(encodedPayload)}`,expiresAt };
 }
 function revokeAdminSession(sessionId) {
   if (sessionId) db.prepare('UPDATE admin_sessions SET revoked_at=? WHERE id=? AND revoked_at IS NULL').run(new Date().toISOString(), sessionId);
+}
+function revokeAdminSessionsFor(adminId) {
+  if (adminId) db.prepare('UPDATE admin_sessions SET revoked_at=? WHERE admin_id=? AND revoked_at IS NULL').run(new Date().toISOString(), adminId);
+}
+// Jejak audit hanya berguna bila selalu mencatat pelakunya, jadi identitas
+// diambil dari sesi, bukan dari input permintaan.
+function recordAudit(req, session, action, summary = null, recordCount = null) {
+  try {
+    db.prepare('INSERT INTO admin_audit_log (id,admin_id,admin_email,action,summary,record_count,client_ip,created_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(id(), session?.adminId || null, session?.email || 'tidak diketahui', action, summary, recordCount, clientAddress(req), new Date().toISOString());
+  } catch (error) { console.error('Gagal mencatat audit:', error); }
 }
 function adminSession(req) {
   const value = cookie(req, 'perumnet_admin');
@@ -467,16 +521,24 @@ function adminSession(req) {
   if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer,expectedBuffer)) return false;
   try {
     const payload = JSON.parse(Buffer.from(encodedPayload,'base64url').toString());
-    if (payload.email !== config.adminEmail || !payload.expiresAt || payload.expiresAt <= new Date().toISOString()) return false;
-    if (payload.cred !== adminCredentialFingerprint()) return false;
+    if (!payload.expiresAt || payload.expiresAt <= new Date().toISOString()) return false;
     // A signed cookie is no longer enough on its own: the session must still be
     // present and unrevoked so logout and credential rotation take effect.
     const stored = payload.jti ? db.prepare('SELECT revoked_at,expires_at FROM admin_sessions WHERE id=?').get(payload.jti) : null;
     if (!stored || stored.revoked_at || stored.expires_at <= new Date().toISOString()) return false;
-    return payload;
+    // Menonaktifkan akun harus langsung memutus aksesnya, termasuk sesi yang
+    // sedang berjalan di perangkat lain.
+    const admin = payload.adminId ? db.prepare('SELECT id,email,full_name,role,disabled_at FROM admin_users WHERE id=?').get(payload.adminId) : null;
+    if (!admin || admin.disabled_at) return false;
+    return { ...payload, email:admin.email, fullName:admin.full_name, role:admin.role };
   } catch { return false; }
 }
 function adminCookie(value, maxAge = adminSessionSeconds()) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
+function currentAdmin(req, res) {
+  const session = adminSession(req);
+  if (!session) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return null; }
+  return session;
+}
 function requireAdmin(req, res) { if (!adminSession(req)) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return false; } return true; }
 const DEFAULT_BODY_LIMIT = 256 * 1024;
 const UPLOAD_BODY_LIMIT = 6 * 1024 * 1024;
@@ -1566,18 +1628,100 @@ async function api(req, res, url) {
   if (route === '/api/admin/login' && req.method === 'POST') {
     if (rateLimited(req, res, 'admin-login', 10, 15 * 60 * 1000)) return;
     const { email,password } = await body(req);
-    if (!matchesSecret(email, config.adminEmail) || !matchesSecret(password, config.adminPassword)) return json(res, 401, { error:'Kredensial admin tidak tepat.' });
-    const session = createAdminSession();
-    return json(res, 200, { ok:true,email:config.adminEmail,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 }, { 'set-cookie':adminCookie(session.value) });
+    const normalizedEmail = String(email ?? '').toLowerCase().trim();
+    const admin = db.prepare('SELECT id,email,full_name,password_hash,role,disabled_at FROM admin_users WHERE email=?').get(normalizedEmail);
+    if (!admin || admin.disabled_at || !verifyPassword(String(password ?? ''), admin.password_hash)) {
+      recordAudit(req, { email:normalizedEmail || 'tidak diketahui' }, 'admin.login.gagal', 'Kredensial ditolak.');
+      return json(res, 401, { error:'Kredensial admin tidak tepat.' });
+    }
+    db.prepare('UPDATE admin_users SET last_login_at=? WHERE id=?').run(new Date().toISOString(), admin.id);
+    const session = createAdminSession(admin);
+    recordAudit(req, { adminId:admin.id,email:admin.email }, 'admin.login', `${admin.full_name} masuk ke dashboard.`);
+    return json(res, 200, { ok:true,email:admin.email,fullName:admin.full_name,role:admin.role,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 }, { 'set-cookie':adminCookie(session.value) });
   }
   if (route === '/api/admin/session' && req.method === 'GET') {
     const session = adminSession(req);
     if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' }, { 'set-cookie':adminCookie('',0) });
-    return json(res, 200, { ok:true,email:config.adminEmail,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 });
+    return json(res, 200, { ok:true,email:session.email,fullName:session.fullName,role:session.role,expiresAt:session.expiresAt,sessionHours:adminSessionSeconds()/3600 });
   }
   if (route === '/api/admin/logout' && req.method === 'POST') {
-    revokeAdminSession(adminSession(req)?.jti);
+    const session = adminSession(req);
+    if (session) recordAudit(req, session, 'admin.logout', `${session.fullName || session.email} keluar.`);
+    revokeAdminSession(session?.jti);
     return json(res, 200, { ok:true }, { 'set-cookie': adminCookie('', 0) });
+  }
+  if (route === '/api/admin/team') {
+    const session = adminSession(req);
+    if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' });
+    const isOwner = session.role === 'owner';
+    if (req.method === 'GET') {
+      const members = db.prepare(`SELECT id,email,full_name,role,created_at,last_login_at,disabled_at
+        FROM admin_users ORDER BY disabled_at IS NOT NULL, role='staff', full_name COLLATE NOCASE`).all();
+      return json(res, 200, { members,you:{ id:session.adminId,role:session.role },canManage:isOwner });
+    }
+    const payload = await body(req);
+    if (req.method === 'POST') {
+      if (!isOwner) return json(res, 403, { error:'Hanya pemilik akun yang dapat menambah anggota tim.' });
+      const email = String(payload.email ?? '').toLowerCase().trim().slice(0,254);
+      const fullName = String(payload.fullName ?? '').trim().replace(/\s+/g,' ').slice(0,120);
+      const password = String(payload.password ?? '');
+      const role = payload.role === 'owner' ? 'owner' : 'staff';
+      if (fullName.length < 2) return json(res, 400, { error:'Nama minimal 2 karakter.' });
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error:'Format email tidak valid.' });
+      if (password.length < 12) return json(res, 400, { error:'Kata sandi admin minimal 12 karakter.' });
+      if (db.prepare('SELECT id FROM admin_users WHERE email=?').get(email)) return json(res, 409, { error:'Email ini sudah dipakai anggota lain.' });
+      const memberId = id();
+      db.prepare('INSERT INTO admin_users (id,email,full_name,password_hash,role,created_at,created_by) VALUES (?,?,?,?,?,?,?)')
+        .run(memberId, email, fullName, hashPassword(password), role, new Date().toISOString(), session.adminId);
+      recordAudit(req, session, 'tim.tambah', `Menambahkan ${fullName} (${email}) sebagai ${role}.`);
+      return json(res, 201, { ok:true,id:memberId });
+    }
+    if (req.method === 'PATCH') {
+      const target = db.prepare('SELECT id,email,full_name,role,disabled_at FROM admin_users WHERE id=?').get(String(payload.memberId ?? ''));
+      if (!target) return json(res, 404, { error:'Anggota tidak ditemukan.' });
+      const editingSelf = target.id === session.adminId;
+      // Setiap orang boleh mengganti kata sandinya sendiri; sisanya milik pemilik.
+      if (!isOwner && !editingSelf) return json(res, 403, { error:'Hanya pemilik akun yang dapat mengubah anggota lain.' });
+      if (payload.password !== undefined) {
+        const password = String(payload.password);
+        if (password.length < 12) return json(res, 400, { error:'Kata sandi admin minimal 12 karakter.' });
+        db.prepare('UPDATE admin_users SET password_hash=? WHERE id=?').run(hashPassword(password), target.id);
+        revokeAdminSessionsFor(target.id);
+        recordAudit(req, session, 'tim.ganti-sandi', `Mengganti kata sandi ${target.full_name}.`);
+      }
+      if (isOwner && payload.fullName !== undefined) {
+        const fullName = String(payload.fullName).trim().replace(/\s+/g,' ').slice(0,120);
+        if (fullName.length < 2) return json(res, 400, { error:'Nama minimal 2 karakter.' });
+        db.prepare('UPDATE admin_users SET full_name=? WHERE id=?').run(fullName, target.id);
+        recordAudit(req, session, 'tim.ubah', `Mengubah nama ${target.full_name} menjadi ${fullName}.`);
+      }
+      if (isOwner && payload.role !== undefined && !editingSelf) {
+        const role = payload.role === 'owner' ? 'owner' : 'staff';
+        db.prepare('UPDATE admin_users SET role=? WHERE id=?').run(role, target.id);
+        recordAudit(req, session, 'tim.ubah-peran', `Peran ${target.full_name} menjadi ${role}.`);
+      }
+      if (isOwner && payload.disabled !== undefined) {
+        const disabled = !!payload.disabled;
+        if (disabled && editingSelf) return json(res, 400, { error:'Anda tidak dapat menonaktifkan akun sendiri.' });
+        const activeOwners = db.prepare("SELECT COUNT(*) n FROM admin_users WHERE role='owner' AND disabled_at IS NULL").get().n;
+        if (disabled && target.role === 'owner' && activeOwners <= 1) return json(res, 400, { error:'Sisakan minimal satu pemilik yang aktif.' });
+        db.prepare('UPDATE admin_users SET disabled_at=? WHERE id=?').run(disabled ? new Date().toISOString() : null, target.id);
+        if (disabled) revokeAdminSessionsFor(target.id);
+        recordAudit(req, session, disabled ? 'tim.nonaktifkan' : 'tim.aktifkan', `${disabled ? 'Menonaktifkan' : 'Mengaktifkan'} ${target.full_name}.`);
+      }
+      return json(res, 200, { ok:true });
+    }
+    return json(res, 405, { error:'Metode tidak didukung.' });
+  }
+  if (route === '/api/admin/audit' && req.method === 'GET') {
+    const session = adminSession(req);
+    if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' });
+    const limit = Math.min(200, Math.max(10, Number(url.searchParams.get('limit')) || 50));
+    const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
+    const total = db.prepare('SELECT COUNT(*) n FROM admin_audit_log').get().n;
+    const entries = db.prepare('SELECT id,admin_email,action,summary,record_count,client_ip,created_at FROM admin_audit_log ORDER BY created_at DESC LIMIT ? OFFSET ?')
+      .all(limit, (page - 1) * limit);
+    return json(res, 200, { entries,pagination:{ page,limit,total,totalPages:Math.max(1, Math.ceil(total / limit)) } });
   }
   if (route === '/api/admin/network' && req.method === 'GET') {
     if (!requireAdmin(req,res)) return;
@@ -1616,7 +1760,8 @@ async function api(req, res, url) {
     return json(res,200,reportData(url),{ 'cache-control':'no-store' });
   }
   if (route === '/api/admin/reports.pdf' && req.method === 'GET') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
+    recordAudit(req, session, 'laporan.unduh-pdf', 'Mengunduh laporan historis sebagai PDF.');
     return writeReportPdf(res,reportData(url));
   }
   if (route === '/api/admin/projects' && req.method === 'POST') {
@@ -1659,10 +1804,11 @@ async function api(req, res, url) {
     return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
   }
   if (route === '/api/admin/gateways' && req.method === 'DELETE') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
     const payload = await body(req);
     const result = deleteAndBlockGateway(payload.gatewayId);
     if (result.error) return json(res, result.status, { error:result.error });
+    recordAudit(req, session, 'gateway.hapus', `Menghapus dan memblokir gateway ${payload.gatewayId}.`);
     return json(res, 200, result);
   }
   if (route === '/api/admin/gateway-blocks' && req.method === 'DELETE') {
@@ -1736,7 +1882,7 @@ async function api(req, res, url) {
     });
   }
   if (route === '/api/admin/users' && req.method === 'POST') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
     const payload = await body(req);
     const fullName = String(payload.fullName || '').trim().replace(/\s+/g,' ').slice(0,120);
     const email = String(payload.email || '').trim().toLowerCase().slice(0,254);
@@ -1752,10 +1898,11 @@ async function api(req, res, url) {
     const userId = id();
     db.prepare('INSERT INTO users (id,full_name,email,phone_number,address,password_hash,is_verified,verification_token,created_at) VALUES (?,?,?,?,?,?,1,NULL,?)')
       .run(userId,fullName,email,phone,address,hashPassword(password),new Date().toISOString());
+    recordAudit(req, session, 'pelanggan.tambah', `Menambahkan akun pelanggan ${email}.`, 1);
     return json(res, 201, { user:db.prepare('SELECT id,full_name,email,phone_number,address,is_verified,created_at FROM users WHERE id=?').get(userId) });
   }
   if (route === '/api/admin/users' && req.method === 'PATCH') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
     const payload = await body(req);
     const userId = String(payload.userId || '').trim();
     const current = db.prepare('SELECT id,email FROM users WHERE id=?').get(userId);
@@ -1771,17 +1918,20 @@ async function api(req, res, url) {
     const duplicate = db.prepare('SELECT id FROM users WHERE email=? AND id<>?').get(email,userId);
     if (duplicate) return json(res, 409, { error:'Email sudah digunakan pengguna lain.' });
     db.prepare('UPDATE users SET full_name=?,email=?,phone_number=?,address=? WHERE id=?').run(fullName,email,phone,address,userId);
+    recordAudit(req, session, 'pelanggan.ubah', `Mengubah data pelanggan ${current.email}.`, 1);
     return json(res, 200, { user:db.prepare('SELECT id,full_name,email,phone_number,address,is_verified,created_at FROM users WHERE id=?').get(userId) });
   }
   if (route === '/api/admin/users' && req.method === 'DELETE') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
     const payload = await body(req);
+    const target = db.prepare('SELECT email FROM users WHERE id=?').get(String(payload.userId || ''));
     const result = deleteUserRecords(payload.userId);
     if (result.error) return json(res, result.status, { error:result.error });
+    recordAudit(req, session, 'pelanggan.hapus', `Menghapus akun pelanggan ${target?.email || payload.userId}.`, 1);
     return json(res, 200, result);
   }
   if (route === '/api/admin/export.csv' && req.method === 'GET') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
     const gatewayId = String(url.searchParams.get('gatewayId') || '').trim();
     const projectId = String(url.searchParams.get('projectId') || '').trim();
     const scoped = !!(gatewayId || projectId);
@@ -1814,6 +1964,9 @@ async function api(req, res, url) {
         row.project_name,row.gateway_name,row.gateway_id,row.mac_address,row.client_ip,row.ssid,row.auth_status,row.last_seen_at,
         Number(row.incoming_bytes || 0) + Number(row.outgoing_bytes || 0),duration].map(csvCell).join(',');
     });
+    // Ekspor mengeluarkan seluruh data pribadi pelanggan sekaligus, jadi
+    // jumlah barisnya ikut dicatat.
+    recordAudit(req, session, 'pelanggan.ekspor-csv', 'Mengunduh data pelanggan terdaftar sebagai CSV.', lines.length);
     res.writeHead(200, {
       'content-type':'text/csv; charset=utf-8',
       'content-disposition':'attachment; filename="pengguna-terdaftar-perumnet.csv"',
@@ -1921,11 +2074,12 @@ async function api(req, res, url) {
     return json(res, 200, { ok:true });
   }
   if (route === '/api/admin/clients' && req.method === 'DELETE') {
-    if (!requireAdmin(req,res)) return;
+    const session = currentAdmin(req,res); if (!session) return;
     const { gatewayId, macAddress } = await body(req);
     if (!gatewayId) return json(res, 400, { error:'Identitas gateway diperlukan agar data perangkat yang tepat dapat dihapus.' });
     const result = deleteClientRecords(gatewayId, macAddress);
     if (result.error) return json(res, result.status, { error:result.error });
+    recordAudit(req, session, 'perangkat.hapus', `Menghapus perangkat ${macAddress} pada gateway ${gatewayId}.`, 1);
     return json(res, 200, result);
   }
   if (route === '/api/admin/uploads' && req.method === 'POST') {

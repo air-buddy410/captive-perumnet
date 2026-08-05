@@ -75,6 +75,49 @@ try {
   const afterLogout = await fetch(`${baseUrl}/api/admin/session`, { headers:{ cookie } });
   assert(afterLogout.status === 401, 'Cookie admin harus tidak berlaku lagi setelah logout.');
 
+  // Akuntabilitas tim: satu akun per orang, dan tindakan sensitif tercatat.
+  const owner = await login();
+  const ownerCookie = owner.headers.get('set-cookie')?.split(';')[0];
+  const addMember = await fetch(`${baseUrl}/api/admin/team`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ email:'staf@example.test', fullName:'Staf Uji', password:'kata-sandi-staf-panjang', role:'staff' })
+  });
+  assert(addMember.status === 201, `Pemilik harus dapat menambah anggota tim (dapat ${addMember.status}).`);
+
+  const staffLogin = await fetch(`${baseUrl}/api/admin/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:'staf@example.test', password:'kata-sandi-staf-panjang' })
+  });
+  const staffCookie = staffLogin.headers.get('set-cookie')?.split(';')[0];
+  assert(staffLogin.status === 200 && staffCookie, 'Anggota tim harus dapat masuk dengan akunnya sendiri.');
+  assert((await staffLogin.json()).role === 'staff', 'Anggota baru harus berperan staff, bukan owner.');
+
+  const staffEscalation = await fetch(`${baseUrl}/api/admin/team`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:staffCookie },
+    body:JSON.stringify({ email:'lain@example.test', fullName:'Orang Lain', password:'kata-sandi-lain-panjang' })
+  });
+  assert(staffEscalation.status === 403, `Staff tidak boleh menambah anggota tim (dapat ${staffEscalation.status}).`);
+
+  await fetch(`${baseUrl}/api/admin/export.csv`, { headers:{ cookie:staffCookie } });
+  const auditResponse = await fetch(`${baseUrl}/api/admin/audit?limit=50`, { headers:{ cookie:ownerCookie } });
+  const audit = await auditResponse.json();
+  const exportEntry = audit.entries.find(entry => entry.action === 'pelanggan.ekspor-csv');
+  assert(exportEntry, 'Ekspor CSV harus tercatat di jejak audit.');
+  assert(exportEntry.admin_email === 'staf@example.test',
+    `Jejak audit harus menyebut pengunduhnya, bukan akun lain (dapat ${exportEntry.admin_email}).`);
+  assert(audit.entries.some(entry => entry.action === 'tim.tambah'), 'Penambahan anggota tim harus tercatat.');
+
+  // Menonaktifkan anggota harus langsung memutus sesinya yang sedang berjalan.
+  const members = await (await fetch(`${baseUrl}/api/admin/team`, { headers:{ cookie:ownerCookie } })).json();
+  const staffMember = members.members.find(member => member.email === 'staf@example.test');
+  const disable = await fetch(`${baseUrl}/api/admin/team`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ memberId:staffMember.id, disabled:true })
+  });
+  assert(disable.status === 200, 'Pemilik harus dapat menonaktifkan anggota.');
+  const afterDisable = await fetch(`${baseUrl}/api/admin/session`, { headers:{ cookie:staffCookie } });
+  assert(afterDisable.status === 401, 'Sesi anggota yang dinonaktifkan harus langsung ditolak.');
+
   let throttled = false;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const response = await fetch(`${baseUrl}/api/admin/login`, {

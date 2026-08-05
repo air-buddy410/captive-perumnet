@@ -17,6 +17,106 @@ function applyCanonicalPortalLinks() {
   if (profileCodes[0]) profileCodes[0].textContent = `${canonicalPortalOrigin}/`;
   if (profileCodes[1]) profileCodes[1].textContent = `${canonicalPortalOrigin}/free`;
 }
+// Halaman Tim & Audit: satu akun per orang, plus catatan siapa mengekspor atau
+// menghapus data pelanggan. Struktur tab dibangun di sini mengikuti pola halaman
+// Data Pengguna agar markup admin tetap terpusat di app.js.
+const adminTeamState = { members:[], canManage:false, you:null, auditPage:1, auditTotalPages:1 };
+function mountAdminTeamPage() {
+  if($('#team-tab')) return;
+  $('#settings-tab').insertAdjacentHTML('beforebegin',`
+    <div id="team-tab" class="tab-content">
+      <section class="user-management-heading">
+        <div><span class="eyebrow">Akuntabilitas tim</span><h2>Tim &amp; Audit</h2><p>Setiap anggota memakai akunnya sendiri, sehingga ekspor dan penghapusan data pelanggan dapat ditelusuri ke orangnya.</p></div>
+        <button class="primary-button add-user-button" id="add-team-member" type="button"><span>＋</span> Tambah Anggota</button>
+      </section>
+      <section class="profile-management-card">
+        <header class="profile-management-header"><div><h3>Anggota Tim</h3><p id="team-hint">Pemilik dapat menambah anggota, mengatur peran, dan menonaktifkan akses.</p></div></header>
+        <form class="team-form" id="team-form" hidden>
+          <label>Nama lengkap<input name="fullName" placeholder="Contoh: Budi Santoso" required /></label>
+          <label>Email<input name="email" type="email" placeholder="nama@perumnet.id" required /></label>
+          <label>Kata sandi<input name="password" type="password" placeholder="Minimal 12 karakter" minlength="12" required /></label>
+          <label>Peran<select name="role"><option value="staff" selected>Staf</option><option value="owner">Pemilik</option></select></label>
+          <p class="inline-feedback" id="team-form-feedback" role="alert"></p>
+          <div class="team-form-actions"><button class="primary-button" type="submit">Simpan Anggota</button><button class="outline-button" type="button" id="cancel-team-member">Batal</button></div>
+        </form>
+        <div class="team-list" id="team-list"><p class="empty-state">Memuat anggota tim…</p></div>
+      </section>
+      <section class="profile-management-card">
+        <header class="profile-management-header"><div><h3>Jejak Audit</h3><p>Catatan login, ekspor data, serta perubahan dan penghapusan data pelanggan.</p></div><div class="profile-header-actions"><button class="outline-button table-refresh-button" id="audit-refresh" type="button" aria-busy="false"><svg class="refresh-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M20 11a8.1 8.1 0 0 0-15.5-2M4 4v5h5"/><path d="M4 13a8.1 8.1 0 0 0 15.5 2M20 20v-5h-5"/></svg><span>Refresh</span></button></div></header>
+        <div class="table-scroll audit-scroll">
+          <table class="profile-table audit-table">
+            <thead><tr><th>Waktu</th><th>Admin</th><th>Tindakan</th><th>Rincian</th><th>Alamat IP</th></tr></thead>
+            <tbody id="audit-rows"><tr class="empty-row"><td colspan="5" class="empty-state">Memuat jejak audit…</td></tr></tbody>
+          </table>
+        </div>
+        <div class="pagination"><button id="audit-prev" type="button" aria-label="Halaman sebelumnya">←</button><span id="audit-indicator">1 / 1</span><button id="audit-next" type="button" aria-label="Halaman berikutnya">→</button></div>
+      </section>
+    </div>`);
+}
+const auditActionLabels = {
+  'admin.login':'Login admin','admin.login.gagal':'Login gagal','admin.logout':'Logout',
+  'pelanggan.ekspor-csv':'Ekspor CSV pelanggan','laporan.unduh-pdf':'Unduh laporan PDF',
+  'pelanggan.tambah':'Tambah pelanggan','pelanggan.ubah':'Ubah pelanggan','pelanggan.hapus':'Hapus pelanggan',
+  'perangkat.hapus':'Hapus perangkat','gateway.hapus':'Hapus gateway',
+  'tim.tambah':'Tambah anggota','tim.ubah':'Ubah anggota','tim.ubah-peran':'Ubah peran',
+  'tim.ganti-sandi':'Ganti kata sandi','tim.nonaktifkan':'Nonaktifkan anggota','tim.aktifkan':'Aktifkan anggota'
+};
+const sensitiveAuditActions = new Set(['pelanggan.ekspor-csv','laporan.unduh-pdf','pelanggan.hapus','perangkat.hapus','gateway.hapus','admin.login.gagal']);
+async function loadAdminTeam() {
+  if(!isAdminView) return;
+  mountAdminTeamPage();
+  const result = await api('/api/admin/team');
+  adminTeamState.members = result?.members || [];
+  adminTeamState.canManage = !!result?.canManage;
+  adminTeamState.you = result?.you || null;
+  renderAdminTeam();
+  await loadAdminAudit();
+}
+function renderAdminTeam() {
+  const canManage = adminTeamState.canManage;
+  $('#add-team-member').style.display = canManage ? '' : 'none';
+  $('#team-hint').textContent = canManage
+    ? 'Pemilik dapat menambah anggota, mengatur peran, dan menonaktifkan akses.'
+    : 'Hanya pemilik akun yang dapat mengubah daftar ini. Anda tetap dapat mengganti kata sandi sendiri.';
+  const rows = adminTeamState.members.map(member => {
+    const self = member.id === adminTeamState.you?.id;
+    const disabled = !!member.disabled_at;
+    const actions = [];
+    if(canManage && !self) actions.push(`<button class="outline-button" data-team-toggle="${escapeHtml(member.id)}" data-disabled="${disabled ? '1' : '0'}">${disabled ? 'Aktifkan' : 'Nonaktifkan'}</button>`);
+    if(canManage || self) actions.push(`<button class="outline-button" data-team-password="${escapeHtml(member.id)}">Ganti kata sandi</button>`);
+    if(canManage && !self) actions.push(`<button class="outline-button" data-team-role="${escapeHtml(member.id)}" data-role="${escapeHtml(member.role)}">Jadikan ${member.role === 'owner' ? 'staff' : 'owner'}</button>`);
+    return `<article class="team-member${disabled ? ' disabled' : ''}">
+      <div class="team-member-identity">
+        <b>${escapeHtml(member.full_name)}${self ? ' <em>(Anda)</em>' : ''}</b>
+        <small>${escapeHtml(member.email)}</small>
+        <span class="team-role team-role-${escapeHtml(member.role)}">${member.role === 'owner' ? 'Pemilik' : 'Staf'}</span>
+        ${disabled ? '<span class="team-role team-role-disabled">Nonaktif</span>' : ''}
+      </div>
+      <div class="team-member-meta"><small>Login terakhir</small><b>${member.last_login_at ? escapeHtml(formatTime(member.last_login_at)) : 'Belum pernah'}</b></div>
+      <div class="team-member-actions">${actions.join('')}</div>
+    </article>`;
+  });
+  $('#team-list').innerHTML = rows.join('') || '<p class="empty-state">Belum ada anggota tim.</p>';
+}
+async function loadAdminAudit() {
+  if(!$('#audit-rows')) return;
+  const result = await api(`/api/admin/audit?page=${adminTeamState.auditPage}&limit=25`);
+  const entries = result?.entries || [];
+  adminTeamState.auditTotalPages = result?.pagination?.totalPages || 1;
+  adminTeamState.auditPage = result?.pagination?.page || 1;
+  $('#audit-indicator').textContent = `${adminTeamState.auditPage} / ${adminTeamState.auditTotalPages}`;
+  $('#audit-rows').innerHTML = entries.length ? entries.map(entry => {
+    const label = auditActionLabels[entry.action] || entry.action;
+    const count = entry.record_count ? ` <em>(${entry.record_count} baris)</em>` : '';
+    return `<tr${sensitiveAuditActions.has(entry.action) ? ' class="audit-sensitive"' : ''}>
+      <td data-label="Waktu">${escapeHtml(formatTime(entry.created_at))}</td>
+      <td data-label="Admin">${escapeHtml(entry.admin_email)}</td>
+      <td data-label="Tindakan">${escapeHtml(label)}</td>
+      <td data-label="Rincian">${escapeHtml(entry.summary || '—')}${count}</td>
+      <td data-label="Alamat IP">${escapeHtml(entry.client_ip || '—')}</td>
+    </tr>`;
+  }).join('') : '<tr class="empty-row"><td colspan="5" class="empty-state">Belum ada aktivitas tercatat.</td></tr>';
+}
 function mountAdminUsersPage() {
   if($('#users-tab')) return;
   $('#network-tab').insertAdjacentHTML('beforebegin',`
@@ -118,6 +218,7 @@ function mountPortalContentStudio() {
     </section>`);
 }
 mountAdminUsersPage();
+mountAdminTeamPage();
 mountPortalContentStudio();
 applyCanonicalPortalLinks();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
@@ -967,15 +1068,16 @@ async function loadAdminNetwork() {
 }
 function activeAdminTab() { return document.querySelector('.tab-content.active')?.id.replace(/-tab$/,'') || ''; }
 function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
-  const tab=['leads','users','network','settings'].includes(requestedTab) ? requestedTab : 'leads';
+  const tab=['leads','users','network','team','settings'].includes(requestedTab) ? requestedTab : 'leads';
   if(tab!=='settings' && activeAdminTab()==='settings' && !confirmDiscardPortalEditor()) return;
   document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.tab===tab));
   document.querySelectorAll('.tab-content').forEach(content=>content.classList.toggle('active',content.id===`${tab}-tab`));
-  $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',settings:'Pengaturan Portal' }[tab];
+  $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',team:'Tim & Audit',settings:'Pengaturan Portal' }[tab];
   if(updateHash) history.replaceState({},'',tab==='leads' ? '/admin' : `/admin#${tab}`);
   if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message));
   if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true }),loadAdminReport({ silent:true })]);
   if(tab==='users') loadAdminUsers({ silent:true });
+  if(tab==='team') { $('#team-form').hidden=true; loadAdminTeam().catch(error=>alert(error.message)); }
   if(tab!=='users') closeAdminUserEditor();
   setNotificationPanel(false);
   setSidebar(false);
@@ -993,6 +1095,44 @@ $('#quick-login-form').addEventListener('submit', async e => { e.preventDefault(
 $('#open-user-login').onclick = () => showUserLogin(); $('#back-from-user-login').onclick = showAccessChoice; $('#close-user-login').onclick = showAccessChoice;
 $('#user-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('.primary-button'), feedback=$('#user-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
 document.querySelectorAll('[data-forgot-password]').forEach(button => button.onclick = () => showForgotPassword(button.dataset.forgotPassword));
+if(isAdminView){
+  const teamForm=$('#team-form');
+  $('#add-team-member').onclick=()=>{ teamForm.hidden=!teamForm.hidden; $('#team-form-feedback').textContent=''; if(!teamForm.hidden) teamForm.querySelector('input').focus(); };
+  $('#cancel-team-member').onclick=()=>{ teamForm.reset(); teamForm.hidden=true; $('#team-form-feedback').textContent=''; };
+  teamForm.addEventListener('submit', async event => {
+    event.preventDefault();
+    const data=new FormData(teamForm), button=teamForm.querySelector('.primary-button'), feedback=$('#team-form-feedback');
+    button.disabled=true; feedback.textContent='';
+    try {
+      await api('/api/admin/team',{ fullName:data.get('fullName'),email:data.get('email'),password:data.get('password'),role:data.get('role') },'POST');
+      teamForm.reset(); teamForm.hidden=true;
+      await loadAdminTeam();
+    } catch(error) { feedback.textContent=error.message; } finally { button.disabled=false; }
+  });
+  $('#team-list').addEventListener('click', async event => {
+    const toggle=event.target.closest('[data-team-toggle]'), password=event.target.closest('[data-team-password]'), role=event.target.closest('[data-team-role]');
+    try {
+      if(toggle){
+        const disabled=toggle.dataset.disabled==='1';
+        if(!disabled && !confirm('Nonaktifkan akses anggota ini? Sesi yang sedang berjalan langsung diputus.')) return;
+        await api('/api/admin/team',{ memberId:toggle.dataset.teamToggle,disabled:!disabled },'PATCH');
+      } else if(password){
+        const value=prompt('Kata sandi baru (minimal 12 karakter):');
+        if(!value) return;
+        await api('/api/admin/team',{ memberId:password.dataset.teamPassword,password:value },'PATCH');
+        alert('Kata sandi diperbarui. Sesi anggota tersebut telah diputus.');
+      } else if(role){
+        const next=role.dataset.role==='owner' ? 'staff' : 'owner';
+        if(!confirm(`Ubah peran anggota ini menjadi ${next}?`)) return;
+        await api('/api/admin/team',{ memberId:role.dataset.teamRole,role:next },'PATCH');
+      } else return;
+      await loadAdminTeam();
+    } catch(error) { alert(error.message); }
+  });
+  $('#audit-refresh').onclick=()=>loadAdminAudit().catch(error=>alert(error.message));
+  $('#audit-prev').onclick=()=>{ if(adminTeamState.auditPage>1){ adminTeamState.auditPage-=1; loadAdminAudit().catch(error=>alert(error.message)); } };
+  $('#audit-next').onclick=()=>{ if(adminTeamState.auditPage<adminTeamState.auditTotalPages){ adminTeamState.auditPage+=1; loadAdminAudit().catch(error=>alert(error.message)); } };
+}
 $('#close-forgot-password').onclick = closeForgotPassword; $('#back-from-forgot-password').onclick = closeForgotPassword;
 // Ketentuan dibuka sebagai modal dari mana pun, jadi ingat layar asalnya supaya
 // pengunjung kembali ke tempat yang sama - termasuk ke formulir pendaftaran

@@ -530,6 +530,40 @@ body.admin-view table:has(tr.empty-row){min-width:0}
   body.admin-view .table-scroll thead th:first-child,body.admin-view .profile-table-scroll thead th:first-child{left:0;z-index:3;box-shadow:inset -1px 0 0 #e3edeb,inset 0 -1px 0 #e3edeb}
 }
 
+/* Halaman Tim & Audit. */
+.team-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin:0 22px 18px;padding:18px;background:#f6faf9;border:1px solid #e2eeeb;border-radius:14px}
+/* display:grid mengalahkan perilaku bawaan atribut hidden, jadi dinyatakan ulang. */
+.team-form[hidden]{display:none}
+.team-form label{display:grid;gap:6px;color:#42585a;font-size:12px;font-weight:600}
+.team-form input,.team-form select{padding:10px 12px;font:inherit;font-size:13px;color:#2f3e40;background:#fff;border:1px solid #d8e6e3;border-radius:9px}
+.team-form .inline-feedback,.team-form-actions{grid-column:1/-1}
+.team-form-actions{display:flex;gap:10px}
+.team-list{display:grid;gap:12px;padding:0 22px 20px}
+.team-member{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:14px;align-items:center;padding:15px 17px;background:#fff;border:1px solid #e4efec;border-radius:13px}
+.team-member.disabled{background:#fbfbfb;opacity:.72}
+.team-member-identity{display:grid;gap:3px;min-width:0}
+.team-member-identity b{color:#2f3e40;font-size:14px}
+.team-member-identity b em{color:#6b7a77;font-style:normal;font-weight:500}
+.team-member-identity small{color:#667571;font-size:12px;word-break:break-all}
+.team-role{justify-self:start;margin-top:3px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;border-radius:999px}
+.team-role-owner{color:#076f67;background:#e7f6f3}
+.team-role-staff{color:#5a666d;background:#eef1f3}
+.team-role-disabled{color:#9a4b46;background:#fbeceb}
+.team-member-meta{display:grid;gap:2px;color:#667571;font-size:11px;text-align:right}
+.team-member-meta b{color:#3e4d4f;font-size:12px;font-weight:600}
+.team-member-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.team-member-actions button{min-height:38px;padding:0 13px;font-size:11px}
+.audit-table td em{color:#667571;font-style:normal;font-size:11px}
+.audit-table tr.audit-sensitive td:nth-child(3){color:#8a4a24;font-weight:600}
+@media(max-width:760px){
+  .team-form{grid-template-columns:minmax(0,1fr);margin:0 18px 16px}
+  .team-list{padding:0 18px 18px}
+  .team-member{grid-template-columns:minmax(0,1fr);gap:11px}
+  .team-member-meta{text-align:left}
+  .team-member-actions{justify-content:flex-start}
+  .team-member-actions button{min-height:44px}
+}
+
 /* Ketentuan penggunaan: modal yang dibuka dari tautan persetujuan. Isinya bisa
    lebih panjang dari modal lain, jadi badannya digulir sendiri agar tombol
    "Saya mengerti" selalu terlihat. */
