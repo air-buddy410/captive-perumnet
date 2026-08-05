@@ -4,3 +4,6 @@ node_modules/
 .DS_Store
 tmp/
 output/
+# Artefak yang dibuat di server saat deploy manual.
+backups/
+*.bak-*
