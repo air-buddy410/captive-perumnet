@@ -2192,7 +2192,10 @@ const portalEntryPoints = new Set(['/', '/admin', '/admin/', '/free', '/free/', 
 const contentSecurityPolicy = [
   "default-src 'self'",
   "script-src 'self'",
-  "style-src 'self' 'unsafe-inline'",
+  // index.html memuat DM Sans dan Plus Jakarta Sans dari Google Fonts. Tanpa dua
+  // baris ini CSP memblokirnya dan portal jatuh ke font sistem.
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: https:",
   "connect-src 'self'",
   "form-action 'self'",

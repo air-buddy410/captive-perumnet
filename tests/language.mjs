@@ -5,8 +5,14 @@ const app = await readFile(new URL('../app.js', import.meta.url), 'utf8');
 
 // Evaluasi potongan sumber yang sebenarnya, bukan salinannya, supaya aturan
 // domain tetap teruji walau kodenya nanti diubah.
-const rulesSource = app.slice(app.indexOf('const hostLanguageRules'), app.indexOf('// Hanya teks yang masih bawaan'));
-assert.ok(rulesSource.includes('hostLanguage'), 'Blok aturan bahasa per domain tidak ditemukan di app.js.');
+const rulesStart = app.indexOf('const hostLanguageRules');
+assert.ok(rulesStart !== -1, 'Blok aturan bahasa per domain tidak ditemukan di app.js.');
+// Berhenti tepat di akhir IIFE hostLanguage, bukan pada penanda komentar, agar
+// tetap tepat walau blok ini dipindah-pindah di dalam berkas.
+const rulesEnd = app.indexOf('})();', app.indexOf('const hostLanguage =', rulesStart)) + '})();'.length;
+const rulesSource = app.slice(rulesStart, rulesEnd);
+assert.ok(rulesSource.includes('const hostLanguage ='), 'Resolver hostLanguage tidak ditemukan.');
+assert.ok(!/isFreeView|isAdminView/.test(rulesSource), 'Blok aturan bahasa tidak boleh bergantung pada state tampilan.');
 
 const resolveFor = hostname => {
   const factory = new Function('location', `${rulesSource}; return hostLanguage;`);

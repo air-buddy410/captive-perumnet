@@ -48,6 +48,15 @@ try {
   assert(shell.headers.get('x-frame-options') === 'DENY', 'Dashboard admin tidak boleh dapat di-iframe.');
   assert(/frame-ancestors 'none'/.test(shell.headers.get('content-security-policy') || ''), 'CSP harus melarang framing.');
   assert(/script-src 'self'/.test(shell.headers.get('content-security-policy') || ''), 'CSP harus membatasi sumber script.');
+  // index.html memuat webfont dari Google. CSP yang lupa mengizinkannya membuat
+  // portal diam-diam jatuh ke font sistem tanpa error yang terlihat pengguna.
+  const policy = shell.headers.get('content-security-policy') || '';
+  const html = await (await fetch(`${baseUrl}/`)).text();
+  for (const [host, directive] of [['fonts.googleapis.com','style-src'],['fonts.gstatic.com','font-src']]) {
+    if (!html.includes(host) && directive === 'style-src') continue;
+    const rule = policy.split(';').map(part => part.trim()).find(part => part.startsWith(directive));
+    assert(rule && rule.includes(host), `CSP ${directive} harus mengizinkan ${host} selama index.html memuat webfont.`);
+  }
 
   const oversized = await fetch(`${baseUrl}/api/auth/login`, {
     method:'POST', headers:{ 'content-type':'application/json' },

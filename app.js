@@ -222,7 +222,18 @@ mountAdminTeamPage();
 mountPortalContentStudio();
 applyCanonicalPortalLinks();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
-if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title='PerumNet — Internet Gratis'; }
+// Satu portal melayani dua domain. Gateway mengarahkan lokasi berpengunjung
+// asing ke domain .com, sementara .id tetap Bahasa Indonesia, jadi bahasa
+// portal mengikuti host yang dibuka pengunjung.
+const hostLanguageRules = [{ suffix:'.com', language:'en' },{ suffix:'.id', language:'id' }];
+const hostLanguage = (() => {
+  const host = location.hostname.toLowerCase().replace(/\.$/,'');
+  return hostLanguageRules.find(rule => host === rule.suffix.slice(1) || host.endsWith(rule.suffix))?.language || null;
+})();
+
+// Judul tab ikut bahasa domain supaya pengunjung asing tidak melihat label
+// Bahasa Indonesia di tab browsernya.
+if (isFreeView) { document.body.classList.add('free-view'); $('#portal-screen').style.display = 'none'; document.title=hostLanguage==='en' ? 'PerumNet — Free Internet' : 'PerumNet — Internet Gratis'; }
 if (isGatewayReviewView) { document.body.classList.add('account-action-view'); $('#portal-screen').style.display='none'; document.title='PerumNet — Verifikasi Gateway'; }
 const pageParams = new URLSearchParams(location.search);
 let verificationToken = pageParams.get('verify');
@@ -298,14 +309,6 @@ const portalEnglishDefaults = {
   free:{ eyebrow:'Free access',headline:'Connect in one click.',description:'No account or personal details required. Press the button below to start using the internet.',primary_button_label:'Connect to Free Internet' }
 };
 const portalEditorState = { activeProfile:'account',profiles:{ account:{...portalContentDefaults.account},free:{...portalContentDefaults.free} },promotions:[],dirty:false };
-// Satu portal melayani dua domain. Gateway mengarahkan lokasi berpengunjung
-// asing ke domain .com, sementara .id tetap Bahasa Indonesia, jadi bahasa
-// portal mengikuti host yang dibuka pengunjung.
-const hostLanguageRules = [{ suffix:'.com', language:'en' },{ suffix:'.id', language:'id' }];
-const hostLanguage = (() => {
-  const host = location.hostname.toLowerCase().replace(/\.$/,'');
-  return hostLanguageRules.find(rule => host === rule.suffix.slice(1) || host.endsWith(rule.suffix))?.language || null;
-})();
 // Hanya teks yang masih bawaan yang ikut diterjemahkan. Kalimat yang sudah
 // diubah admin dibiarkan apa adanya karena itu pilihan kata mereka sendiri.
 const translatableProfileFields = ['eyebrow','headline','description','primary_button_label'];
