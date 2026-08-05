@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/styles.css?v=20260804-portal-align8" />
+    <link rel="stylesheet" href="/styles.css?v=20260805-terms-modal3" />
   </head>
   <body>
     <main class="app-shell">
@@ -35,7 +35,7 @@
             <div class="input-grid"><label>Email<input name="email" type="email" placeholder="nama@email.com" required /></label><label>Nomor WhatsApp<input name="phone" type="tel" placeholder="08xx xxxx xxxx" required /></label></div>
             <label>Alamat<input name="address" placeholder="Kota atau alamat tempat tinggal" required /></label>
             <label>Kata sandi<input name="password" type="password" minlength="8" placeholder="Minimal 8 karakter" required /></label>
-            <label class="consent"><input name="consent" type="checkbox" required /><span>Saya setuju dengan <a href="#">Syarat & Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari PerumNet.</span></label>
+            <label class="consent"><input name="consent" type="checkbox" required /><span>Saya setuju dengan <a href="#" class="terms-link" data-open-terms>Syarat & Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari PerumNet.</span></label>
             <p id="form-error" class="form-error" role="alert"></p>
             <button class="primary-button" type="submit">Daftar & Verifikasi Email <span>→</span></button>
           </form>
@@ -50,7 +50,7 @@
           <div id="account-portal-extras" class="portal-content-extras" aria-live="polite"></div>
           <form class="quick-login" id="quick-login-form"><div class="quick-login-heading"><b>Sudah punya akun?</b><span>Login langsung untuk akses High Speed</span></div><div class="quick-login-fields"><label>Email<input type="email" placeholder="nama@email.com" autocomplete="email" required /></label><label>Kata sandi<input type="password" placeholder="Kata sandi" autocomplete="current-password" required /></label><button type="submit">Login <span>→</span></button></div><button class="forgot-password-link" data-forgot-password="portal" type="button">Lupa kata sandi?</button><p id="quick-login-error" class="inline-feedback" role="alert"></p></form>
           <button class="access-option high-speed-option" id="choose-high-speed" type="button"><span class="access-icon">⚡</span><span><b>Belum punya akun?</b><strong>Daftar akun High Speed</strong><small>Daftar sekali dan gunakan akun Anda setiap kali berkunjung.</small></span><i>→</i></button>
-          <p class="choice-terms">Dengan masuk atau mendaftar, Anda menyetujui <a href="#">Ketentuan penggunaan jaringan</a>.</p>
+          <p class="choice-terms">Dengan masuk atau mendaftar, Anda menyetujui <a href="#" class="terms-link" data-open-terms>Ketentuan penggunaan jaringan</a>.</p>
         </div>
       </section>
 
@@ -81,7 +81,7 @@
             </div>
             <button class="primary-button free-connect-button" id="free-connect" type="button"><span class="button-icon">⌁</span><span class="button-label">Sambungkan Internet Gratis</span><span class="button-arrow">→</span></button>
             <p id="free-feedback" class="inline-feedback centered" role="alert"></p>
-            <p class="free-terms">Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan PerumNet.</p>
+            <p class="free-terms">Dengan melanjutkan, Anda menyetujui <a href="#" class="terms-link" data-open-terms>ketentuan penggunaan jaringan PerumNet</a>.</p>
           </div>
         </div>
       </section>
@@ -119,7 +119,8 @@
         </div>
       </section>
 
-      <section id="reset-password-screen" class="login-page account-action-page" aria-labelledby="reset-password-title">
+      <section id="terms-screen" class="login-page portal-modal" role="dialog" aria-modal="true" aria-labelledby="terms-title"><div class="login-card modal-card terms-card"><button class="modal-close" id="close-terms" type="button" aria-label="Tutup ketentuan">×</button><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow" id="terms-eyebrow">Ketentuan &amp; Data</span><h2 id="terms-title">Ketentuan penggunaan jaringan</h2><div class="terms-body" id="terms-body"><h3>Data yang kami kumpulkan</h3><p>Saat Anda mendaftar akses High Speed, kami menyimpan nama lengkap, email, nomor HP, dan alamat. Untuk setiap perangkat yang terhubung &mdash; termasuk akses gratis &mdash; kami mencatat alamat MAC, alamat IP, nama jaringan, serta waktu dan durasi penggunaan.</p><h3>Untuk apa data ini dipakai</h3><ul><li>Menyediakan dan mengelola akses WiFi Anda.</li><li>Mengirimkan informasi promo dan penawaran layanan internet PerumNet.</li><li>Mengundang Anda ke event yang diselenggarakan PerumNet.</li></ul><h3>Berapa lama disimpan</h3><p>Catatan perangkat pengguna akses gratis dihapus otomatis setelah 30 hari. Data akun pelanggan terdaftar disimpan selama akun Anda masih aktif.</p><h3>Hak Anda</h3><p>Anda dapat meminta salinan, koreksi, atau penghapusan data Anda kapan saja melalui <a href="mailto:it@perumnet.id">it@perumnet.id</a>.</p></div><button class="primary-button" id="terms-understood" type="button">Saya mengerti</button></div></section>
+    <section id="reset-password-screen" class="login-page account-action-page" aria-labelledby="reset-password-title">
         <div class="login-card account-recovery-card"><div class="brand"><img src="/assets/perumnet-logo.png" alt="PerumNet" /></div><span class="eyebrow">Keamanan akun</span><h2 id="reset-password-title">Buat kata sandi baru</h2><p>Gunakan minimal 8 karakter dan pastikan kata sandi mudah Anda ingat.</p>
           <form id="reset-password-form"><label>Kata sandi baru<input name="password" type="password" minlength="8" placeholder="Minimal 8 karakter" autocomplete="new-password" required /></label><label>Konfirmasi kata sandi<input name="confirmPassword" type="password" minlength="8" placeholder="Ulangi kata sandi baru" autocomplete="new-password" required /></label><p id="reset-password-feedback" class="inline-feedback" role="alert"></p><button class="primary-button">Simpan Kata Sandi Baru <span>→</span></button></form>
         </div>
@@ -165,6 +166,6 @@
         </div>
       </section>
     </main>
-    <script src="/app.js?v=20260804-portal-align8"></script>
+    <script src="/app.js?v=20260805-terms-modal3"></script>
   </body>
 </html>

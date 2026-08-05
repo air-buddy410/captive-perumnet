@@ -779,6 +779,31 @@ function recordWifiDogTelemetry(session, url, now = new Date()) {
   }
   return true;
 }
+// Retensi data tamu. Perangkat yang tidak pernah mendaftar hanya menitipkan
+// MAC, IP, dan jejak sesi, jadi jejak itu dibuang setelah masa simpan habis.
+// Pelanggan terdaftar dikecualikan: setiap pernyataan di bawah dibatasi pada
+// baris tanpa user_id, sehingga perangkat yang kemudian mendaftar tetap utuh
+// riwayatnya.
+const guestRetentionDays = Math.max(1, Number(process.env.GUEST_DATA_RETENTION_DAYS || 30));
+function purgeGuestData(now = new Date()) {
+  const cutoff = new Date(now.getTime() - guestRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const nowIso = now.toISOString();
+  const removed = {
+    access_logs: db.prepare('DELETE FROM access_logs WHERE user_id IS NULL AND timestamp<?').run(cutoff).changes,
+    telemetry_samples: db.prepare('DELETE FROM telemetry_samples WHERE user_id IS NULL AND sampled_at<?').run(cutoff).changes,
+    // Sesi dan perangkat yang masih aktif tidak pernah disentuh, supaya tamu
+    // yang sedang online tidak terputus oleh pembersihan.
+    captive_sessions: db.prepare(`DELETE FROM captive_sessions WHERE user_id IS NULL AND created_at<?
+      AND (revoked_at IS NOT NULL OR authorized_until IS NULL OR authorized_until<?)`).run(cutoff, nowIso).changes,
+    clients: db.prepare(`DELETE FROM clients WHERE user_id IS NULL AND COALESCE(last_seen_at,first_seen_at)<?
+      AND (authorized_until IS NULL OR authorized_until<?)`).run(cutoff, nowIso).changes,
+    notifications: db.prepare('DELETE FROM notifications WHERE user_id IS NULL AND created_at<?').run(cutoff).changes
+  };
+  const total = Object.values(removed).reduce((sum, value) => sum + value, 0);
+  if (total) console.log(`Retensi data tamu: ${total} baris lebih tua dari ${guestRetentionDays} hari dihapus`, removed);
+  return removed;
+}
+
 function sweepOfflineClients(now = new Date()) {
   const nowIso = now.toISOString();
   const configured = Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20;
@@ -2108,4 +2133,12 @@ const server = createServer(async (req, res) => {
     json(res, 500, { error: 'Kesalahan server.' });
   }
 });
+// Pembersihan lain hanya berjalan saat admin membuka dashboard, yang tidak
+// cukup andal untuk kewajiban retensi. Timer ini membuatnya berjalan sendiri.
+const guestRetentionTimer = setInterval(() => {
+  try { purgeGuestData(); } catch (error) { console.error('Retensi data tamu gagal:', error); }
+}, 60 * 60 * 1000);
+guestRetentionTimer.unref();
+try { purgeGuestData(); } catch (error) { console.error('Retensi data tamu gagal:', error); }
+
 server.listen(config.port, () => console.log(`PerumNet Captive Portal running at ${config.baseUrl}`));

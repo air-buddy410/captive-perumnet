@@ -530,6 +530,25 @@ body.admin-view table:has(tr.empty-row){min-width:0}
   body.admin-view .table-scroll thead th:first-child,body.admin-view .profile-table-scroll thead th:first-child{left:0;z-index:3;box-shadow:inset -1px 0 0 #e3edeb,inset 0 -1px 0 #e3edeb}
 }
 
+/* Ketentuan penggunaan: modal yang dibuka dari tautan persetujuan. Isinya bisa
+   lebih panjang dari modal lain, jadi badannya digulir sendiri agar tombol
+   "Saya mengerti" selalu terlihat. */
+.terms-link{color:var(--teal-dark);text-decoration:underline;text-underline-offset:2px;cursor:pointer}
+/* Kartu jadi kolom flex supaya badan teks yang menyusut, bukan tombolnya yang
+   terdorong keluar layar pada perangkat pendek. */
+.terms-card{display:flex;flex-direction:column;text-align:left}
+.terms-body{flex:1 1 auto;min-height:0;overflow-y:auto;margin:4px 0 20px;padding-right:6px;color:#4d5b5c;font-size:13px;line-height:1.65}
+.terms-card .primary-button{flex:0 0 auto}
+.terms-body h3{margin:16px 0 6px;color:#2f3e40;font-size:13px;font-weight:700}
+.terms-body h3:first-child{margin-top:4px}
+.terms-body p{margin:0 0 10px}
+.terms-body ul{margin:0 0 10px;padding-left:18px}
+.terms-body li{margin-bottom:5px}
+.terms-body a{color:var(--teal-dark)}
+@media(max-width:520px){
+  .terms-body{font-size:12.5px}
+}
+
 /* Align the account portal (/) with the one-click portal (/free). Both screens
    share a layout but had drifted apart: a flatter gradient on the left panel,
    no tint at all on the content column, a full-width square SSID banner instead

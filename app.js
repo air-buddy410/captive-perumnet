@@ -1,6 +1,6 @@
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
-const screens = { portal: $('#portal-screen'), free:$('#free-screen'), success: $('#success-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), gatewayReview:$('#gateway-review-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
+const screens = { portal: $('#portal-screen'), free:$('#free-screen'), success: $('#success-screen'), verify: $('#verify-screen'), userLogin: $('#user-login-screen'), forgotPassword:$('#forgot-password-screen'), terms:$('#terms-screen'), resetPassword:$('#reset-password-screen'), accountStatus:$('#account-status-screen'), gatewayReview:$('#gateway-review-screen'), login: $('#login-screen'), dashboard: $('#dashboard-screen') };
 // Preserve every query parameter forwarded by the gateway. WiFiDog uses
 // gw_address, gw_port, gw_id, mac, url, and token.
 const captiveContext = Object.fromEntries(new URLSearchParams(location.search).entries());
@@ -250,6 +250,23 @@ function setLabelCopy(selector,value) {
   const node=label ? [...label.childNodes].find(item=>item.nodeType===Node.TEXT_NODE && item.textContent.trim()) : null;
   if(node) node.textContent=value;
 }
+// Modal ketentuan dipakai bersama portal akun dan portal free, jadi salinannya
+// mengikuti bahasa profil yang sedang aktif.
+function applyTermsLanguage(english) {
+  $('#terms-eyebrow').textContent = english ? 'Terms & data' : 'Ketentuan & Data';
+  $('#terms-title').textContent = english ? 'Network terms of use' : 'Ketentuan penggunaan jaringan';
+  $('#terms-understood').textContent = english ? 'I understand' : 'Saya mengerti';
+  $('#close-terms').setAttribute('aria-label', english ? 'Close terms' : 'Tutup ketentuan');
+  $('#terms-body').innerHTML = english
+    ? `<h3>What we collect</h3><p>When you register for High Speed access we store your full name, email, phone number and address. For every connected device &mdash; free access included &mdash; we record the MAC address, IP address, network name, and the time and duration of use.</p>
+       <h3>How we use it</h3><ul><li>To provide and manage your WiFi access.</li><li>To send you PerumNet internet promotions and service offers.</li><li>To invite you to events held by PerumNet.</li></ul>
+       <h3>How long we keep it</h3><p>Device records for free access are deleted automatically after 30 days. Registered customer accounts are kept for as long as the account remains active.</p>
+       <h3>Your rights</h3><p>You can request a copy, a correction, or deletion of your data at any time at <a href="mailto:it@perumnet.id">it@perumnet.id</a>.</p>`
+    : `<h3>Data yang kami kumpulkan</h3><p>Saat Anda mendaftar akses High Speed, kami menyimpan nama lengkap, email, nomor HP, dan alamat. Untuk setiap perangkat yang terhubung &mdash; termasuk akses gratis &mdash; kami mencatat alamat MAC, alamat IP, nama jaringan, serta waktu dan durasi penggunaan.</p>
+       <h3>Untuk apa data ini dipakai</h3><ul><li>Menyediakan dan mengelola akses WiFi Anda.</li><li>Mengirimkan informasi promo dan penawaran layanan internet PerumNet.</li><li>Mengundang Anda ke event yang diselenggarakan PerumNet.</li></ul>
+       <h3>Berapa lama disimpan</h3><p>Catatan perangkat pengguna akses gratis dihapus otomatis setelah 30 hari. Data akun pelanggan terdaftar disimpan selama akun Anda masih aktif.</p>
+       <h3>Hak Anda</h3><p>Anda dapat meminta salinan, koreksi, atau penghapusan data Anda kapan saja melalui <a href="mailto:it@perumnet.id">it@perumnet.id</a>.</p>`;
+}
 function applyAccountLanguage(language='id') {
   const english=language==='en';
   document.documentElement.lang=english?'en':'id';
@@ -268,7 +285,7 @@ function applyAccountLanguage(language='id') {
   $('#lead-form [name="phone"]').placeholder=english?'08xx xxxx xxxx':'08xx xxxx xxxx';
   $('#lead-form [name="address"]').placeholder=english?'City or home address':'Kota atau alamat tempat tinggal';
   $('#lead-form [name="password"]').placeholder=english?'At least 8 characters':'Minimal 8 karakter';
-  $('#lead-form .consent span').innerHTML=english?'I agree to the <a href="#">Terms &amp; Conditions</a> and the processing of my data for PerumNet information and offers.':'Saya setuju dengan <a href="#">Syarat &amp; Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari PerumNet.';
+  $('#lead-form .consent span').innerHTML=english?'I agree to the <a href="#" class="terms-link" data-open-terms>Terms &amp; Conditions</a> and the processing of my data for PerumNet information and offers.':'Saya setuju dengan <a href="#" class="terms-link" data-open-terms>Syarat &amp; Ketentuan</a> serta pengolahan data untuk informasi dan penawaran dari PerumNet.';
   setLeadingCopy('#lead-form .primary-button',english?'Register & Verify Email':'Daftar & Verifikasi Email');
   setLeadingCopy('.account-prompt',english?'Already have an account?':'Sudah punya akun?');
   $('#open-user-login').textContent=english?'Sign in now':'Masuk sekarang';
@@ -283,7 +300,7 @@ function applyAccountLanguage(language='id') {
   $('#choose-high-speed b').textContent=english?'No account yet?':'Belum punya akun?';
   $('#choose-high-speed strong').textContent=english?'Register for High Speed':'Daftar akun High Speed';
   $('#choose-high-speed small').textContent=english?'Register once and reuse your account on every visit.':'Daftar sekali dan gunakan akun Anda setiap kali berkunjung.';
-  $('#access-choice .choice-terms').innerHTML=english?'By signing in or registering, you agree to the <a href="#">network terms of use</a>.':'Dengan masuk atau mendaftar, Anda menyetujui <a href="#">Ketentuan penggunaan jaringan</a>.';
+  $('#access-choice .choice-terms').innerHTML=english?'By signing in or registering, you agree to the <a href="#" class="terms-link" data-open-terms>network terms of use</a>.':'Dengan masuk atau mendaftar, Anda menyetujui <a href="#" class="terms-link" data-open-terms>Ketentuan penggunaan jaringan</a>.'; applyTermsLanguage(english);
   const loginCard=$('#user-login-screen .login-card');
   loginCard.querySelector('.eyebrow').textContent=english?'Customer account':'Akun pelanggan';
   loginCard.querySelector('h2').textContent=english?'Sign in for high-speed internet':'Masuk untuk internet cepat';
@@ -325,7 +342,7 @@ function applyFreeLanguage(language='id') {
   }
   const duration=Number(portalSettings.limited_session_hours || 2);
   $('#free-duration').textContent=english?`${duration} hours`:`${duration} jam`;
-  $('#free-screen .free-terms').textContent=english?'By continuing, you agree to the PerumNet network terms of use.':'Dengan melanjutkan, Anda menyetujui ketentuan penggunaan jaringan PerumNet.';
+  $('#free-screen .free-terms').innerHTML=english?'By continuing, you agree to the <a href="#" class="terms-link" data-open-terms>PerumNet network terms of use</a>.':'Dengan melanjutkan, Anda menyetujui <a href="#" class="terms-link" data-open-terms>ketentuan penggunaan jaringan PerumNet</a>.'; applyTermsLanguage(english);
 }
 function renderPublicPortalContent() {
   const profiles=normalizedPortalProfiles(portalSettings);
@@ -977,6 +994,28 @@ $('#open-user-login').onclick = () => showUserLogin(); $('#back-from-user-login'
 $('#user-login-form').addEventListener('submit', async e => { e.preventDefault(); const fields=e.currentTarget.querySelectorAll('input'), button=e.currentTarget.querySelector('.primary-button'), feedback=$('#user-login-error'); button.disabled=true; feedback.textContent=''; try { const result=await api('/api/auth/login',{ email:fields[0].value,password:fields[1].value,context:captiveContext }); handleAuthorization(result,()=>connectToWifi(true)); } catch(error) { feedback.textContent=error.message; button.disabled=false; } });
 document.querySelectorAll('[data-forgot-password]').forEach(button => button.onclick = () => showForgotPassword(button.dataset.forgotPassword));
 $('#close-forgot-password').onclick = closeForgotPassword; $('#back-from-forgot-password').onclick = closeForgotPassword;
+// Ketentuan dibuka sebagai modal dari mana pun, jadi ingat layar asalnya supaya
+// pengunjung kembali ke tempat yang sama - termasuk ke formulir pendaftaran
+// yang sedang diisi.
+let termsReturn = 'portal';
+function showTerms() {
+  const active = Object.entries(screens).find(([,element]) => element.classList.contains('active'));
+  if (active && active[0] !== 'terms') termsReturn = active[0];
+  show('terms');
+  $('#close-terms').focus();
+}
+function closeTerms() { show(termsReturn); }
+document.addEventListener('click', event => {
+  const trigger = event.target.closest('[data-open-terms]');
+  if (!trigger) return;
+  event.preventDefault();
+  showTerms();
+});
+$('#close-terms').onclick = closeTerms;
+$('#terms-understood').onclick = closeTerms;
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && screens.terms.classList.contains('active')) closeTerms();
+});
 $('#forgot-password-form').addEventListener('submit', async event => { event.preventDefault(); const form=event.currentTarget, button=form.querySelector('.primary-button'), feedback=$('#forgot-password-feedback'), email=new FormData(form).get('email'); button.disabled=true; feedback.textContent='Mengirim tautan reset…'; feedback.classList.remove('success'); try { const result=await api('/api/auth/forgot-password',{ email }); feedback.textContent=result.message; feedback.classList.add('success'); form.reset(); } catch(error) { feedback.textContent=error.message; } finally { button.disabled=false; } });
 $('#reset-password-form').addEventListener('submit', async event => { event.preventDefault(); const form=event.currentTarget, data=new FormData(form), password=String(data.get('password')||''), confirmation=String(data.get('confirmPassword')||''), button=form.querySelector('.primary-button'), feedback=$('#reset-password-feedback'); feedback.textContent=''; if(password.length<8){ feedback.textContent='Kata sandi baru minimal 8 karakter.'; return; } if(password!==confirmation){ feedback.textContent='Konfirmasi kata sandi belum sama.'; return; } button.disabled=true; try { await api('/api/auth/reset-password',{ token:passwordResetToken,password }); passwordResetToken=''; clearAccountActionUrl(); form.reset(); showAccountStatus('Kata sandi berhasil diperbarui.','Silakan kembali ke jendela login WiFi dan masuk menggunakan email serta kata sandi baru.'); } catch(error) { feedback.textContent=error.message; } finally { button.disabled=false; } });
 $('#account-status-action').onclick = () => location.assign(destinationUrl);

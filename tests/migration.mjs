@@ -34,7 +34,10 @@ const port = 33000 + Math.floor(Math.random() * 1000);
 const baseUrl = `http://127.0.0.1:${port}`;
 const child = spawn(process.execPath, ['server.mjs'], {
   cwd:new URL('..',import.meta.url),
-  env:{ ...process.env,PORT:String(port),APP_BASE_URL:baseUrl,PORTAL_DATA_DIR:dataDir,NODE_ENV:'test',ADMIN_EMAIL:'migration@example.com',ADMIN_PASSWORD:'migration-password',SMTP_HOST:'',SMTP_USER:'',SMTP_PASSWORD:'' },
+  // Fixture perangkat lawas sengaja bertanggal Januari. Retensi data tamu diuji
+  // terpisah di tests/retention.mjs, jadi dinonaktifkan di sini supaya kegagalan
+  // migrasi tidak tersamar sebagai baris yang terhapus karena kedaluwarsa.
+  env:{ ...process.env,PORT:String(port),APP_BASE_URL:baseUrl,PORTAL_DATA_DIR:dataDir,NODE_ENV:'test',GUEST_DATA_RETENTION_DAYS:'36500',ADMIN_EMAIL:'migration@example.com',ADMIN_PASSWORD:'migration-password',SMTP_HOST:'',SMTP_USER:'',SMTP_PASSWORD:'' },
   stdio:['ignore','pipe','pipe']
 });
 let serverError='';
