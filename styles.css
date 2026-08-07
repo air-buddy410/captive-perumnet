@@ -604,7 +604,11 @@ body.admin-view table:has(tr.empty-row){min-width:0}
    tanpa menggulir. */
 @media(max-width:880px){
   .hotspot-map-body{grid-template-columns:minmax(0,1fr)}
-  .hotspot-side{max-height:min(230px,32vh);border-left:0;border-top:1px solid #eef4f2}
+  /* Di layar sempit panel berada di bawah peta, di dalam halaman yang juga
+     bisa digulir. Scroll bersarang membuat sentuhan ambigu: tidak jelas
+     mana yang bergerak. Panel dibiarkan memanjang penuh sehingga hanya ada
+     satu gulungan, yaitu halamannya. */
+  .hotspot-side{max-height:none;overflow:visible;border-left:0;border-top:1px solid #eef4f2}
 }
 @media(max-width:760px){
   [id^="hotspot-map-"]{height:clamp(240px,42vh,320px)}
