@@ -227,10 +227,16 @@ function renderHotspotSide(mode) {
         <i class="hotspot-dot ${escapeHtml(gateway.map_status)}"></i>
         <div><b>${escapeHtml(gateway.name)}</b><small>${escapeHtml(gateway.location || 'Lokasi belum diisi')}</small></div>
       </div>
+      <span class="hotspot-item-status ${escapeHtml(gateway.map_status)}">${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)}</span>
       <div class="hotspot-item-meta">
-        <span>${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)}</span>
-        <span>${Number(gateway.authorized_count || 0)} pengunjung aktif</span>
-        ${!editable && !placed ? '<span class="hotspot-unplaced-note">Titik belum ditandai</span>' : ''}
+        <div class="hotspot-metric"><small>Pengunjung aktif</small><b>${Number(gateway.authorized_count || 0)}</b></div>
+        <div class="hotspot-metric"><small>Perangkat tercatat</small><b>${Number(gateway.client_count || 0)}</b></div>
+      </div>
+      <div class="hotspot-detail">
+        <div><span>Project</span><span>${escapeHtml(gateway.project_name || '—')}</span></div>
+        ${gateway.model ? `<div><span>Model</span><span>${escapeHtml(gateway.model)}</span></div>` : ''}
+        <div><span>Terakhir terlihat</span><span>${escapeHtml(gateway.last_seen_at ? formatTime(gateway.last_seen_at) : 'Belum pernah')}</span></div>
+        <div><span>Titik peta</span><span>${placed ? escapeHtml(gateway.latitude.toFixed(4) + ', ' + gateway.longitude.toFixed(4)) : 'Belum ditandai'}</span></div>
       </div>
       ${actions}
     </article>`;
