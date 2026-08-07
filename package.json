@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --watch server.mjs",
     "start": "node server.mjs",
-    "test": "node tests/migration.mjs && node tests/wifidog.mjs && node tests/security.mjs && node tests/retention.mjs && node tests/language.mjs && node tests/ui.mjs"
+    "test": "node tests/prasyarat.mjs && node tests/migration.mjs && node tests/wifidog.mjs && node tests/security.mjs && node tests/retention.mjs && node tests/language.mjs && node tests/ui.mjs"
   },
   "dependencies": {
     "nodemailer": "^9.0.3",
