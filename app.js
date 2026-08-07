@@ -136,7 +136,10 @@ function mountHotspotMapPanel() {
         <div id="hotspot-map" role="application" aria-label="Peta titik hotspot"></div>
         <aside class="hotspot-side" id="hotspot-side"><p class="empty-state">Memuat gateway…</p></aside>
       </div>
-      <p class="hotspot-hint" id="hotspot-hint" role="status"></p>
+      <footer class="hotspot-footer">
+        <div class="hotspot-summary" id="hotspot-summary"></div>
+        <p class="hotspot-hint" id="hotspot-hint" role="status"></p>
+      </footer>
     </section>`);
 }
 function hotspotMarkerIcon(status) {
@@ -237,7 +240,23 @@ async function loadHotspotMap() {
     : `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tekan "Tandai di peta" lalu klik posisinya.`;
   renderHotspotSide();
   renderHotspotMarkers();
+  renderHotspotSummary();
   hotspotMapState.map?.invalidateSize();
+}
+// Baris di bawah peta sebelumnya hanya menampung pesan sesekali dan menyisakan
+// ruang kosong, jadi diisi ringkasan yang selalu relevan.
+function renderHotspotSummary() {
+  const summary=$('#hotspot-summary'); if(!summary) return;
+  const rows=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned');
+  const count=status=>rows.filter(gateway=>gateway.map_status===status).length;
+  const visitors=rows.reduce((total,gateway)=>total+Number(gateway.authorized_count || 0),0);
+  const chips=[`<b>${rows.length}</b> hotspot`];
+  ['online','idle','offline','pending'].forEach(status=>{
+    const total=count(status);
+    if(total) chips.push(`<i class="hotspot-dot ${status}"></i><b>${total}</b> ${escapeHtml(hotspotStatusLabels[status].toLowerCase())}`);
+  });
+  chips.push(`<b>${visitors}</b> pengunjung aktif`);
+  summary.innerHTML=chips.map(chip=>`<span>${chip}</span>`).join('');
 }
 function mountAdminUsersPage() {
   if($('#users-tab')) return;
