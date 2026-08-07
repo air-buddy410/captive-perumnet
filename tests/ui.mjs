@@ -164,5 +164,10 @@ assert.match(css, /\.admin-user-modal/, 'Tambah dan edit pengguna harus mengguna
 assert.match(css, /body\.admin-view table\.profile-table\{display:block;width:100%;min-width:0;max-width:100%/, 'Tabel pengguna harus berubah menjadi kartu pada mobile.');
 assert.match(css, /Mobile admin polish[\s\S]*body\.admin-view \.dash-header\{\s*position:fixed;[\s\S]*safe-area-inset-top/, 'Header admin mobile harus tetap terlihat ketika halaman digulir dan menghormati safe area perangkat.');
 assert.match(css, /Mobile admin polish[\s\S]*\.promo-editor \.editor-section-heading \.outline-button\{\s*grid-column:1\/-1;\s*width:100%;[\s\S]*margin:0;/, 'Tombol tambah promo harus tetap berada di dalam kartu pada mobile.');
+assert.match(app, /className:'hotspot-pin'[\s\S]{0,400}<svg viewBox="0 0 28 36"/, 'Titik hotspot harus memakai pin WiFi yang jelas, bukan bulatan polos.');
+assert.match(app, /hotspotMarkerColors\s*=\s*\{\s*online:'#0aa88f',\s*idle:'#e0a12b',\s*offline:'#c2564f',\s*pending:'#94a5a1'/, 'Warna pin harus tetap mengikuti warna status pada legenda peta.');
+assert.match(app, /attributionControl\.setPrefix\(false\)/, 'Promosi Leaflet dan bendera pada peta harus dimatikan.');
+assert.match(app, /attribution:\s*'[^']*OpenStreetMap/, 'Kredit OpenStreetMap wajib tetap tampil karena lisensi ubin peta.');
+assert.match(css, /\.hotspot-pin svg\{display:block/, 'Pin peta harus punya gaya sendiri agar terbaca di atas ubin peta.');
 
 console.log('Responsive UI contract: PASS');

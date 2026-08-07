@@ -170,14 +170,30 @@ function mountHotspotPanel(mode) {
       </footer>
     </section>`);
 }
+// Titik polos sulit dibedakan di atas peta yang ramai. Pin berisi ikon WiFi
+// lebih jelas bentuknya, sementara warnanya tetap menandakan status.
+const hotspotMarkerColors = { online:'#0aa88f',idle:'#e0a12b',offline:'#c2564f',pending:'#94a5a1' };
 function hotspotMarkerIcon(status) {
-  return L.divIcon({ className:'', iconSize:[20,20], iconAnchor:[10,10], popupAnchor:[0,-12],
-    html:`<span class="hotspot-marker ${status}"></span>` });
+  const warna = hotspotMarkerColors[status] || hotspotMarkerColors.pending;
+  return L.divIcon({
+    className:'hotspot-pin', iconSize:[28,36], iconAnchor:[14,35], popupAnchor:[0,-31],
+    html:`<svg viewBox="0 0 28 36" width="28" height="36" aria-hidden="true">
+      <path d="M14 34.5S25 21.6 25 13.2A11 11 0 1 0 3 13.2C3 21.6 14 34.5 14 34.5Z"
+        fill="${warna}" stroke="#ffffff" stroke-width="2.2" stroke-linejoin="round"/>
+      <g fill="none" stroke="#ffffff" stroke-width="1.9" stroke-linecap="round">
+        <path d="M8.6 12.1a8 8 0 0 1 10.8 0"/>
+        <path d="M10.9 15.2a4.6 4.6 0 0 1 6.2 0"/>
+      </g>
+      <circle cx="14" cy="18.6" r="1.6" fill="#ffffff"/>
+    </svg>` });
 }
 function initHotspotMap(mode) {
   const state = hotspotState[mode];
   if(state.map || typeof L === 'undefined' || !hotspotEl(mode,'map')) return;
   const map = L.map(`hotspot-map-${mode}`,{ scrollWheelZoom:false }).setView([-8.65,115.216],11);
+  // Prefiks bawaan Leaflet (nama pustaka dan bendera) bukan keharusan lisensi
+  // dan dihapus. Kredit OpenStreetMap wajib dipertahankan oleh ODbL.
+  map.attributionControl.setPrefix(false);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
     maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>'
   }).addTo(map);

@@ -593,11 +593,13 @@ body.admin-view table:has(tr.empty-row){min-width:0}
 .hotspot-hint.error{color:#a8443e;font-weight:600}
 /* Fokus peta tidak perlu cincin biru bawaan; sudah jelas dari kursor crosshair. */
 [id^="hotspot-map-"]:focus,[id^="hotspot-map-"]:focus-visible,.leaflet-container:focus{outline:none}
-.hotspot-marker{display:block;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 7px #0b3b3629}
-.hotspot-marker.online{background:#0aa88f}
-.hotspot-marker.idle{background:#e0a12b}
-.hotspot-marker.offline{background:#c2564f}
-.hotspot-marker.pending{background:#cdd8d5}
+/* Pin ditarik sebagai SVG di dalam divIcon; bayangan halus membuatnya tetap
+   terbaca di atas peta yang padat. */
+.hotspot-pin svg{display:block;filter:drop-shadow(0 3px 5px #0b3b362e)}
+/* Kredit peta dibuat samar agar tidak bersaing dengan isi, tetapi tetap
+   terbaca sesuai kewajiban lisensi OpenStreetMap. */
+.leaflet-control-attribution{padding:1px 6px;font-size:9px;background:#ffffffcc;border-radius:6px 0 0 0}
+.leaflet-control-attribution a{color:#5b6b6d}
 .leaflet-container{font:inherit}
 /* Menumpuk hanya di bawah 880px. Di tablet lanskap peta dan daftar tetap
    berdampingan, sehingga kartunya pendek dan statistik tetap terlihat
