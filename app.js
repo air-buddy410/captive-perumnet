@@ -117,6 +117,128 @@ async function loadAdminAudit() {
     </tr>`;
   }).join('') : '<tr class="empty-row"><td colspan="5" class="empty-state">Belum ada aktivitas tercatat.</td></tr>';
 }
+// Peta sebaran hotspot di puncak Data Pengunjung. Perangkat Ruijie tidak
+// melaporkan GPS, jadi titiknya ditandai sekali oleh admin lalu statusnya
+// mengikuti heartbeat dan jumlah pengunjung secara otomatis.
+const hotspotStatusLabels = { online:'Online',idle:'Tanpa pengunjung',offline:'Offline',pending:'Menunggu verifikasi' };
+const hotspotMapState = { map:null, markers:new Map(), gateways:[], placing:null, fitted:false };
+function mountHotspotMapPanel() {
+  if($('#hotspot-map-card') || !$('#leads-tab')) return;
+  $('#leads-tab').insertAdjacentHTML('afterbegin',`
+    <section class="hotspot-map-card" id="hotspot-map-card">
+      <header class="hotspot-map-header">
+        <div><span class="eyebrow">Sebaran jaringan</span><h3>Peta Titik Hotspot</h3><p id="hotspot-map-subtitle">Status mengikuti heartbeat gateway dan jumlah pengunjung yang sedang terhubung.</p></div>
+        <div class="hotspot-legend" aria-label="Keterangan status">
+          ${['online','idle','offline','pending'].map(key=>`<span><i class="hotspot-dot ${key}"></i>${hotspotStatusLabels[key]}</span>`).join('')}
+        </div>
+      </header>
+      <div class="hotspot-map-body">
+        <div id="hotspot-map" role="application" aria-label="Peta titik hotspot"></div>
+        <aside class="hotspot-side" id="hotspot-side"><p class="empty-state">Memuat gateway…</p></aside>
+      </div>
+      <p class="hotspot-hint" id="hotspot-hint" role="status"></p>
+    </section>`);
+}
+function hotspotMarkerIcon(status) {
+  return L.divIcon({ className:'', iconSize:[20,20], iconAnchor:[10,10], popupAnchor:[0,-12],
+    html:`<span class="hotspot-marker ${status}"></span>` });
+}
+function initHotspotMap() {
+  if(hotspotMapState.map || typeof L === 'undefined' || !$('#hotspot-map')) return;
+  // Titik tengah awal di Indonesia; peta otomatis menyesuaikan begitu ada pin.
+  const map = L.map('hotspot-map',{ scrollWheelZoom:false }).setView([-8.65,115.216],11);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
+    maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>'
+  }).addTo(map);
+  map.on('click', async event => {
+    if(!hotspotMapState.placing) return;
+    const gatewayId = hotspotMapState.placing;
+    const { lat,lng } = event.latlng;
+    try {
+      await api('/api/admin/gateways/location',{ gatewayId,latitude:lat,longitude:lng },'PATCH');
+      setHotspotPlacing(null);
+      await loadHotspotMap();
+      setHotspotHint('Titik tersimpan.');
+    } catch(error) { setHotspotHint(error.message,true); }
+  });
+  hotspotMapState.map = map;
+}
+function setHotspotHint(message='',isError=false) {
+  const hint=$('#hotspot-hint'); if(!hint) return;
+  hint.textContent=message; hint.classList.toggle('error',isError);
+}
+function setHotspotPlacing(gatewayId) {
+  hotspotMapState.placing = gatewayId;
+  $('#hotspot-map')?.classList.toggle('placing',!!gatewayId);
+  renderHotspotSide();
+  if(gatewayId){
+    const gateway=hotspotMapState.gateways.find(item=>item.id===gatewayId);
+    setHotspotHint(`Klik posisi ${gateway?.name || gatewayId} di peta. Tekan Esc untuk batal.`);
+  } else setHotspotHint('');
+}
+function renderHotspotSide() {
+  const side=$('#hotspot-side'); if(!side) return;
+  const rows=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned');
+  if(!rows.length){ side.innerHTML='<p class="empty-state">Belum ada gateway terdaftar.</p>'; return; }
+  side.innerHTML=rows.map(gateway=>{
+    const placed=Number.isFinite(gateway.latitude) && Number.isFinite(gateway.longitude);
+    const placing=hotspotMapState.placing===gateway.id;
+    return `<article class="hotspot-item${placed ? '' : ' unplaced'}">
+      <div class="hotspot-item-head">
+        <i class="hotspot-dot ${escapeHtml(gateway.map_status)}"></i>
+        <div><b>${escapeHtml(gateway.name)}</b><small>${escapeHtml(gateway.location || 'Lokasi belum diisi')}</small></div>
+      </div>
+      <div class="hotspot-item-meta">
+        <span>${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)}</span>
+        <span>${Number(gateway.authorized_count || 0)} pengunjung aktif</span>
+      </div>
+      <div class="hotspot-item-actions">
+        <button class="outline-button" data-hotspot-place="${escapeHtml(gateway.id)}">${placing ? 'Batal' : placed ? 'Pindahkan titik' : 'Tandai di peta'}</button>
+        ${placed ? `<button class="outline-button" data-hotspot-clear="${escapeHtml(gateway.id)}">Hapus titik</button>` : ''}
+      </div>
+    </article>`;
+  }).join('');
+}
+function renderHotspotMarkers() {
+  const map=hotspotMapState.map; if(!map) return;
+  hotspotMapState.markers.forEach(marker=>marker.remove());
+  hotspotMapState.markers.clear();
+  const points=[];
+  hotspotMapState.gateways.forEach(gateway=>{
+    if(!Number.isFinite(gateway.latitude) || !Number.isFinite(gateway.longitude)) return;
+    const marker=L.marker([gateway.latitude,gateway.longitude],{ icon:hotspotMarkerIcon(gateway.map_status),title:gateway.name }).addTo(map);
+    marker.bindPopup(`<b>${escapeHtml(gateway.name)}</b><br>${escapeHtml(gateway.location || 'Lokasi belum diisi')}<br>
+      ${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)} · ${Number(gateway.authorized_count || 0)} pengunjung aktif<br>
+      <small>Terakhir terlihat ${escapeHtml(gateway.last_seen_at ? formatTime(gateway.last_seen_at) : 'belum pernah')}</small>`);
+    hotspotMapState.markers.set(gateway.id,marker);
+    points.push([gateway.latitude,gateway.longitude]);
+  });
+  // Sekali saja: setelah admin menggeser peta, jangan dipaksa balik tiap refresh.
+  if(points.length && !hotspotMapState.fitted){
+    hotspotMapState.fitted=true;
+    if(points.length===1) map.setView(points[0],16);
+    else map.fitBounds(points,{ padding:[36,36] });
+  }
+}
+async function loadHotspotMap() {
+  if(!isAdminView) return;
+  mountHotspotMapPanel();
+  initHotspotMap();
+  const result=await api('/api/admin/network');
+  hotspotMapState.gateways=(result?.gateways || []).map(gateway=>({
+    ...gateway,
+    latitude:gateway.latitude===null || gateway.latitude===undefined ? null : Number(gateway.latitude),
+    longitude:gateway.longitude===null || gateway.longitude===undefined ? null : Number(gateway.longitude)
+  }));
+  const placed=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned' && Number.isFinite(gateway.latitude)).length;
+  const total=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned').length;
+  $('#hotspot-map-subtitle').textContent = placed === total
+    ? 'Status mengikuti heartbeat gateway dan jumlah pengunjung yang sedang terhubung.'
+    : `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tekan "Tandai di peta" lalu klik posisinya.`;
+  renderHotspotSide();
+  renderHotspotMarkers();
+  hotspotMapState.map?.invalidateSize();
+}
 function mountAdminUsersPage() {
   if($('#users-tab')) return;
   $('#network-tab').insertAdjacentHTML('beforebegin',`
@@ -219,6 +341,7 @@ function mountPortalContentStudio() {
 }
 mountAdminUsersPage();
 mountAdminTeamPage();
+mountHotspotMapPanel();
 mountPortalContentStudio();
 applyCanonicalPortalLinks();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
@@ -1104,7 +1227,7 @@ function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
   $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',team:'Tim & Audit',settings:'Pengaturan Portal' }[tab];
   if(updateHash) history.replaceState({},'',tab==='leads' ? '/admin' : `/admin#${tab}`);
   if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message));
-  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true }),loadAdminReport({ silent:true })]);
+  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true }),loadAdminReport({ silent:true }),loadHotspotMap().catch(()=>{})]);
   if(tab==='users') loadAdminUsers({ silent:true });
   if(tab==='team') { $('#team-form').hidden=true; loadAdminTeam().catch(error=>alert(error.message)); }
   if(tab!=='users') closeAdminUserEditor();
@@ -1158,6 +1281,15 @@ if(isAdminView){
       await loadAdminTeam();
     } catch(error) { alert(error.message); }
   });
+  $('#hotspot-side').addEventListener('click', async event => {
+    const place=event.target.closest('[data-hotspot-place]'), clear=event.target.closest('[data-hotspot-clear]');
+    if(place){ setHotspotPlacing(hotspotMapState.placing===place.dataset.hotspotPlace ? null : place.dataset.hotspotPlace); return; }
+    if(!clear) return;
+    if(!confirm('Hapus titik peta gateway ini?')) return;
+    try { await api('/api/admin/gateways/location',{ gatewayId:clear.dataset.hotspotClear,clear:true },'PATCH'); await loadHotspotMap(); setHotspotHint('Titik dihapus.'); }
+    catch(error) { setHotspotHint(error.message,true); }
+  });
+  document.addEventListener('keydown',event=>{ if(event.key==='Escape' && hotspotMapState.placing) setHotspotPlacing(null); });
   $('#audit-refresh').onclick=()=>loadAdminAudit().catch(error=>alert(error.message));
   $('#audit-prev').onclick=()=>{ if(adminTeamState.auditPage>1){ adminTeamState.auditPage-=1; loadAdminAudit().catch(error=>alert(error.message)); } };
   $('#audit-next').onclick=()=>{ if(adminTeamState.auditPage<adminTeamState.auditTotalPages){ adminTeamState.auditPage+=1; loadAdminAudit().catch(error=>alert(error.message)); } };

@@ -536,6 +536,50 @@ body.admin-view table:has(tr.empty-row){min-width:0}
   body.admin-view .table-scroll thead th:first-child,body.admin-view .profile-table-scroll thead th:first-child{left:0;z-index:3;box-shadow:inset -1px 0 0 #e3edeb,inset 0 -1px 0 #e3edeb}
 }
 
+/* Peta sebaran hotspot di puncak Data Pengunjung. */
+.hotspot-map-card{margin-bottom:18px;background:#fff;border:1px solid #e4efec;border-radius:16px;overflow:hidden}
+.hotspot-map-header{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;justify-content:space-between;padding:18px 22px 14px}
+.hotspot-map-header h3{margin:4px 0 5px;color:#2f3e40;font:800 17px "Plus Jakarta Sans",Arial,sans-serif}
+.hotspot-map-header p{margin:0;max-width:60ch;color:#667571;font-size:12px;line-height:1.55}
+.hotspot-legend{display:flex;flex-wrap:wrap;gap:12px;color:#4d5b5c;font-size:11px}
+.hotspot-legend span{display:inline-flex;gap:6px;align-items:center}
+.hotspot-dot{display:inline-block;width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+.hotspot-dot.online{background:#0aa88f}
+.hotspot-dot.idle{background:#e0a12b}
+.hotspot-dot.offline{background:#c2564f}
+.hotspot-dot.pending{background:#fff;border:2px solid #9aa8a5}
+.hotspot-map-body{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:0;border-top:1px solid #eef4f2}
+#hotspot-map{height:340px;background:#eef3f2}
+#hotspot-map.placing{cursor:crosshair}
+.hotspot-side{max-height:340px;overflow-y:auto;padding:12px;border-left:1px solid #eef4f2;background:#fbfdfc}
+.hotspot-item{padding:11px 12px;margin-bottom:9px;background:#fff;border:1px solid #e8f0ee;border-radius:11px}
+.hotspot-item.unplaced{border-style:dashed}
+.hotspot-item-head{display:flex;gap:9px;align-items:flex-start}
+.hotspot-item-head b{display:block;color:#2f3e40;font-size:13px}
+.hotspot-item-head small{display:block;color:#667571;font-size:11px}
+.hotspot-item-head .hotspot-dot{margin-top:4px}
+.hotspot-item-meta{display:flex;flex-wrap:wrap;gap:10px;margin:7px 0 9px;color:#667571;font-size:11px}
+.hotspot-item-actions{display:flex;flex-wrap:wrap;gap:7px}
+.hotspot-item-actions button{min-height:36px;padding:0 11px;font-size:11px}
+.hotspot-hint{margin:0;padding:11px 22px;color:#4d5b5c;font-size:12px;background:#f6faf9;border-top:1px solid #eef4f2;min-height:40px}
+.hotspot-hint.error{color:#a8443e;background:#fdf3f2}
+.hotspot-marker{display:block;width:16px;height:16px;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 7px #0b3b3629}
+.hotspot-marker.online{background:#0aa88f}
+.hotspot-marker.idle{background:#e0a12b}
+.hotspot-marker.offline{background:#c2564f}
+.hotspot-marker.pending{background:#cdd8d5}
+.leaflet-container{font:inherit}
+@media(max-width:1100px){
+  .hotspot-map-body{grid-template-columns:minmax(0,1fr)}
+  .hotspot-side{max-height:none;border-left:0;border-top:1px solid #eef4f2}
+}
+@media(max-width:760px){
+  #hotspot-map{height:260px}
+  .hotspot-map-header{padding:16px 18px 12px}
+  .hotspot-hint{padding:11px 18px}
+  .hotspot-item-actions button{min-height:44px}
+}
+
 /* Halaman Tim & Audit. */
 .team-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px;margin:0 22px 18px;padding:18px;background:#f6faf9;border:1px solid #e2eeeb;border-radius:14px}
 /* display:grid mengalahkan perilaku bawaan atribut hidden, jadi dinyatakan ulang. */

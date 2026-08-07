@@ -309,6 +309,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS admin_audit_log (
   created_at TEXT NOT NULL
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)');
+// Titik hotspot di peta. Perangkat Ruijie tidak melaporkan GPS, jadi lokasi
+// ditandai sekali oleh admin dan tersimpan di sini.
+try { db.exec('ALTER TABLE gateways ADD COLUMN latitude REAL'); } catch { /* Kolom sudah ada. */ }
+try { db.exec('ALTER TABLE gateways ADD COLUMN longitude REAL'); } catch { /* Kolom sudah ada. */ }
 
 const config = {
   port: Number(process.env.PORT || 3000),
@@ -1730,7 +1734,7 @@ async function api(req, res, url) {
       FROM projects p LEFT JOIN gateways g ON g.project_id=p.id
       LEFT JOIN clients c ON c.gateway_id=g.id
       GROUP BY p.id ORDER BY CASE WHEN p.id='default-project' THEN 0 ELSE 1 END,p.name`).all();
-    const gateways = db.prepare(`SELECT g.id,g.project_id,g.name,g.location,g.model,g.created_at,g.last_seen_at,g.approval_status,g.approved_at,
+    const gateways = db.prepare(`SELECT g.id,g.project_id,g.name,g.location,g.model,g.created_at,g.last_seen_at,g.approval_status,g.approved_at,g.latitude,g.longitude,
       p.name AS project_name,COUNT(c.mac_address) AS client_count,
       SUM(CASE WHEN c.auth_status='authorized' THEN 1 ELSE 0 END) AS authorized_count
       FROM gateways g JOIN projects p ON p.id=g.project_id
@@ -1745,7 +1749,14 @@ async function api(req, res, url) {
     const offlineDeadline = new Date(Date.now() - (Number.isFinite(config.clientOfflineMinutes) && config.clientOfflineMinutes > 0 ? config.clientOfflineMinutes : 20) * 60 * 1000).toISOString();
     return json(res, 200, {
       projects,
-      gateways:gateways.map(gateway => ({ ...gateway, status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline' })),
+      gateways:gateways.map(gateway => ({ ...gateway,
+      status:gateway.id !== 'unassigned' && gateway.last_seen_at >= offlineDeadline ? 'online' : 'offline',
+      // Status peta memisahkan gateway yang hidup tapi belum melayani siapa pun
+      // dari yang benar-benar tidak terjangkau.
+      map_status:gateway.id === 'unassigned' ? 'offline'
+        : gateway.approval_status !== 'approved' ? 'pending'
+        : !(gateway.last_seen_at >= offlineDeadline) ? 'offline'
+        : Number(gateway.authorized_count || 0) > 0 ? 'online' : 'idle' })),
       portalNetworks,
       blockedGateways
     });
@@ -1773,6 +1784,28 @@ async function api(req, res, url) {
     const project = { id:`project-${id().slice(0,12)}`, name, location, created_at:new Date().toISOString() };
     db.prepare('INSERT INTO projects (id,name,location,created_at) VALUES (?,?,?,?)').run(project.id, project.name, project.location, project.created_at);
     return json(res, 201, { project });
+  }
+  // Titik peta disimpan terpisah dari form gateway supaya sekali klik di peta
+  // tidak ikut menimpa nama, lokasi, atau project yang sedang diedit admin.
+  if (route === '/api/admin/gateways/location' && req.method === 'PATCH') {
+    const session = currentAdmin(req,res); if (!session) return;
+    const payload = await body(req);
+    const gatewayId = gatewayKey(payload.gatewayId);
+    const gateway = db.prepare('SELECT id,name FROM gateways WHERE id=?').get(gatewayId);
+    if (!gateway) return json(res, 404, { error:'Gateway tidak ditemukan.' });
+    if (payload.clear) {
+      db.prepare('UPDATE gateways SET latitude=NULL,longitude=NULL WHERE id=?').run(gatewayId);
+      recordAudit(req, session, 'gateway.titik-hapus', `Menghapus titik peta ${gateway.name}.`);
+      return json(res, 200, { ok:true,latitude:null,longitude:null });
+    }
+    const latitude = Number(payload.latitude);
+    const longitude = Number(payload.longitude);
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) return json(res, 400, { error:'Latitude harus antara -90 dan 90.' });
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) return json(res, 400, { error:'Longitude harus antara -180 dan 180.' });
+    const rounded = { latitude:Math.round(latitude * 1e6) / 1e6,longitude:Math.round(longitude * 1e6) / 1e6 };
+    db.prepare('UPDATE gateways SET latitude=?,longitude=? WHERE id=?').run(rounded.latitude, rounded.longitude, gatewayId);
+    recordAudit(req, session, 'gateway.titik-simpan', `Menandai lokasi ${gateway.name} di ${rounded.latitude}, ${rounded.longitude}.`);
+    return json(res, 200, { ok:true,...rounded });
   }
   if (route === '/api/admin/gateways' && req.method === 'POST') {
     if (!requireAdmin(req,res)) return;
@@ -2185,7 +2218,13 @@ const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; chars
 // Only these files may ever leave the web root. Serving the directory verbatim
 // exposed data/portal.db, .env and the .git directory to unauthenticated callers.
 const servableFiles = new Set(['/index.html', '/app.js', '/styles.css']);
-const servableAsset = pathname => /^\/assets\/(?:fonts\/)?[a-zA-Z0-9._-]+\.(?:png|jpe?g|webp|svg|ico|woff2)$/.test(pathname) && !pathname.includes('..');
+// Skrip dan stylesheet hanya boleh dari assets/vendor, sementara gambar dan font
+// dari assets atau assets/fonts. Dipisah supaya perluasan untuk pustaka peta
+// tidak sekaligus membuka ekstensi kode di seluruh folder aset.
+const servableAsset = pathname => !pathname.includes('..') && (
+  /^\/assets\/(?:fonts\/)?[a-zA-Z0-9._-]+\.(?:png|jpe?g|webp|svg|ico|woff2)$/.test(pathname) ||
+  /^\/assets\/vendor\/[a-zA-Z0-9._-]+\.(?:js|css)$/.test(pathname)
+);
 const portalEntryPoints = new Set(['/', '/admin', '/admin/', '/free', '/free/', '/gateway-review', '/gateway-review/']);
 // script-src stays strict because index.html loads no inline script; style-src
 // needs unsafe-inline for the chart bars app.js renders as style attributes.

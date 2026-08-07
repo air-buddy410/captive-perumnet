@@ -135,6 +135,30 @@ try {
   const afterDisable = await fetch(`${baseUrl}/api/admin/session`, { headers:{ cookie:staffCookie } });
   assert(afterDisable.status === 401, 'Sesi anggota yang dinonaktifkan harus langsung ditolak.');
 
+  // Titik peta hotspot: koordinat ditandai manual, jadi rentangnya harus dijaga
+  // dan perubahannya tercatat seperti tindakan admin lainnya.
+  const gatewayList = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:ownerCookie } })).json();
+  const mapGateway = gatewayList.gateways.find(gateway => gateway.id !== 'unassigned') || gatewayList.gateways[0];
+  assert(mapGateway.map_status, 'Setiap gateway harus membawa map_status untuk peta hotspot.');
+
+  const badLatitude = await fetch(`${baseUrl}/api/admin/gateways/location`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ gatewayId:mapGateway.id, latitude:120, longitude:115 })
+  });
+  assert(badLatitude.status === 400, `Latitude di luar -90..90 harus ditolak (dapat ${badLatitude.status}).`);
+
+  const savePoint = await fetch(`${baseUrl}/api/admin/gateways/location`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ gatewayId:mapGateway.id, latitude:-8.65, longitude:115.216 })
+  });
+  assert(savePoint.status === 200, `Titik peta yang valid harus tersimpan (dapat ${savePoint.status}).`);
+  const afterSave = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:ownerCookie } })).json();
+  const saved = afterSave.gateways.find(gateway => gateway.id === mapGateway.id);
+  assert(Number(saved.latitude) === -8.65 && Number(saved.longitude) === 115.216, 'Koordinat harus benar-benar tersimpan.');
+
+  const mapAudit = await (await fetch(`${baseUrl}/api/admin/audit?limit=50`, { headers:{ cookie:ownerCookie } })).json();
+  assert(mapAudit.entries.some(entry => entry.action === 'gateway.titik-simpan'), 'Penandaan titik peta harus tercatat di jejak audit.');
+
   let throttled = false;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const response = await fetch(`${baseUrl}/api/admin/login`, {
