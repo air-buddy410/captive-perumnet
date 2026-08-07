@@ -596,6 +596,17 @@ body.admin-view table:has(tr.empty-row){min-width:0}
 /* Pin ditarik sebagai SVG di dalam divIcon; bayangan halus membuatnya tetap
    terbaca di atas peta yang padat. */
 .hotspot-pin svg{display:block;filter:drop-shadow(0 3px 5px #0b3b362e)}
+/* Lencana gabungan untuk titik yang berdempetan. Lingkaran luar yang samar
+   membedakannya dari pin tunggal walau dilihat sekilas. */
+.hotspot-cluster-badge{display:flex;align-items:center;justify-content:center;border-radius:50%;
+  color:#fff;font-weight:700;font-size:12px;line-height:1;border:2.5px solid #fff;cursor:pointer}
+.hotspot-cluster-badge.online{background:#0aa88f;box-shadow:0 3px 8px #0b3b3629,0 0 0 6px #0aa88f38}
+.hotspot-cluster-badge.idle{background:#e0a12b;box-shadow:0 3px 8px #0b3b3629,0 0 0 6px #e0a12b38}
+.hotspot-cluster-badge.offline{background:#c2564f;box-shadow:0 3px 8px #0b3b3629,0 0 0 6px #c2564f38}
+.hotspot-cluster-badge.pending{background:#94a5a1;box-shadow:0 3px 8px #0b3b3629,0 0 0 6px #94a5a138}
+.hotspot-cluster-list{display:grid;gap:3px;margin:5px 0 2px}
+.hotspot-cluster-row{display:flex;gap:6px;align-items:center}
+.hotspot-cluster-tip{max-width:230px;font-size:11px}
 /* Kredit peta dibuat samar agar tidak bersaing dengan isi, tetapi tetap
    terbaca sesuai kewajiban lisensi OpenStreetMap. */
 .leaflet-control-attribution{padding:1px 6px;font-size:9px;background:#ffffffcc;border-radius:6px 0 0 0}

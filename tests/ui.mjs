@@ -169,5 +169,12 @@ assert.match(app, /hotspotMarkerColors\s*=\s*\{\s*online:'#0aa88f',\s*idle:'#e0a
 assert.match(app, /attributionControl\.setPrefix\(false\)/, 'Promosi Leaflet dan bendera pada peta harus dimatikan.');
 assert.match(app, /attribution:\s*'[^']*OpenStreetMap/, 'Kredit OpenStreetMap wajib tetap tampil karena lisensi ubin peta.');
 assert.match(css, /\.hotspot-pin svg\{display:block/, 'Pin peta harus punya gaya sendiri agar terbaca di atas ubin peta.');
+assert.match(app, /function hotspotClusters\(map, gateways\)[\s\S]{0,400}latLngToLayerPoint[\s\S]{0,200}<= hotspotClusterRadius/, 'Titik yang berdempetan di layar harus digabung memakai jarak piksel, bukan jarak bumi.');
+assert.match(app, /hotspotStatusUrgency\s*=\s*\['offline','idle','pending','online'\]/, 'Warna lencana gabungan harus mengikuti status paling perlu ditindak.');
+assert.match(app, /hotspotViews\[mode\]\.editable\s*\n?\s*\?\s*placed\.map\(gateway=>\(\{ members:\[gateway\] \}\)\)/, 'Peta editor harus tetap menampilkan titik satu per satu agar bisa dipindahkan.');
+assert.match(app, /map\.on\('zoomend moveend', \(\) => renderHotspotMarkers\(mode\)\)/, 'Pengelompokan harus dihitung ulang setiap tingkat zoom berubah.');
+assert.match(app, /if\(!state\.markers\.size \|\| signature!==state\.clusterKey\)\{/, 'Penanda hanya digambar ulang bila pengelompokan atau isinya berubah, supaya popup tidak tertutup tiap penyegaran.');
+assert.match(app, /bounds\.getNorthEast\(\)\.equals\(bounds\.getSouthWest\(\)\) \|\| map\.getZoom\(\) >= map\.getMaxZoom\(\)/, 'Titik yang koordinatnya sama persis harus dibuka sebagai daftar, bukan diperbesar tanpa hasil.');
+assert.match(css, /\.hotspot-cluster-badge\.offline\{background:#c2564f/, 'Lencana gabungan harus memakai warna status yang sama dengan legenda.');
 
 console.log('Responsive UI contract: PASS');

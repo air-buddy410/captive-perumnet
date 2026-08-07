@@ -137,7 +137,7 @@ const hotspotViews = {
   edit:{ host:'#network-tab', editable:true, judul:'Titik Hotspot di Peta',
     deskripsi:'Tandai posisi setiap gateway agar muncul di peta halaman Data Pengunjung.' }
 };
-function createHotspotState() { return { map:null, markers:new Map(), gateways:[], placing:null, fitted:false }; }
+function createHotspotState() { return { map:null, markers:new Map(), gateways:[], placing:null, fitted:false, clusterKey:null }; }
 const hotspotState = { view:createHotspotState(), edit:createHotspotState() };
 // Tampilan awal peta yang disimpan admin. Bila ada, kedua peta membuka di
 // posisi itu alih-alih menebak sendiri dari sebaran titik.
@@ -187,6 +187,39 @@ function hotspotMarkerIcon(status) {
       <circle cx="14" cy="18.6" r="1.6" fill="#ffffff"/>
     </svg>` });
 }
+// Saat peta diperkecil, titik yang berjauhan di dunia nyata bisa menumpuk di
+// layar sampai saling menutupi. Yang berdekatan digabung jadi satu lencana
+// berangka, lalu pecah lagi begitu peta diperbesar. Radius dihitung dalam
+// piksel layar, bukan meter, karena yang jadi masalah memang tumpang tindihnya.
+const hotspotClusterRadius = 46;
+// Warna lencana mengikuti status paling perlu ditindak di dalamnya, supaya
+// gangguan tetap terlihat walau titiknya sedang tergabung.
+const hotspotStatusUrgency = ['offline','idle','pending','online'];
+function hotspotClusters(map, gateways) {
+  const groups = [];
+  gateways.forEach(gateway => {
+    const point = map.latLngToLayerPoint([gateway.latitude, gateway.longitude]);
+    const near = groups.find(group => group.point.distanceTo(point) <= hotspotClusterRadius);
+    if(near) near.members.push(gateway);
+    else groups.push({ point, members:[gateway] });
+  });
+  return groups;
+}
+function hotspotClusterIcon(members) {
+  const status = hotspotStatusUrgency.find(key => members.some(member => member.map_status === key)) || 'pending';
+  const ukuran = members.length >= 50 ? 46 : members.length >= 10 ? 40 : 34;
+  return L.divIcon({
+    className:'hotspot-cluster', iconSize:[ukuran,ukuran], iconAnchor:[ukuran/2,ukuran/2], popupAnchor:[0,-ukuran/2],
+    html:`<span class="hotspot-cluster-badge ${status}" style="width:${ukuran}px;height:${ukuran}px">${members.length}</span>`
+  });
+}
+function hotspotClusterSummary(members) {
+  const baris = members.slice(0,6).map(member =>
+    `<span class="hotspot-cluster-row"><i class="hotspot-dot ${escapeHtml(member.map_status)}"></i>${escapeHtml(member.name)}</span>`).join('');
+  const sisa = members.length - 6;
+  return `<b>${members.length} hotspot berdekatan</b><div class="hotspot-cluster-list">${baris}</div>
+    ${sisa > 0 ? `<small>dan ${sisa} lainnya</small>` : ''}`;
+}
 function initHotspotMap(mode) {
   const state = hotspotState[mode];
   if(state.map || typeof L === 'undefined' || !hotspotEl(mode,'map')) return;
@@ -197,6 +230,12 @@ function initHotspotMap(mode) {
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
     maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>'
   }).addTo(map);
+  if(!hotspotViews[mode].editable){
+    // Pengelompokan dihitung dalam piksel, jadi hasilnya berubah setiap tingkat
+    // zoom. Menggeser peta tidak mengubah apa pun, dan penjaga sidik jari di
+    // renderHotspotMarkers yang memastikan itu tidak jadi kerja sia-sia.
+    map.on('zoomend moveend', () => renderHotspotMarkers(mode));
+  }
   if(hotspotViews[mode].editable){
     map.on('click', async event => {
       if(!state.placing) return;
@@ -260,18 +299,51 @@ function renderHotspotSide(mode) {
 }
 function renderHotspotMarkers(mode) {
   const state=hotspotState[mode], map=state.map; if(!map) return;
-  state.markers.forEach(marker=>marker.remove());
-  state.markers.clear();
-  const points=[];
-  state.gateways.forEach(gateway=>{
-    if(!Number.isFinite(gateway.latitude) || !Number.isFinite(gateway.longitude)) return;
-    const marker=L.marker([gateway.latitude,gateway.longitude],{ icon:hotspotMarkerIcon(gateway.map_status),title:gateway.name }).addTo(map);
-    marker.bindPopup(`<b>${escapeHtml(gateway.name)}</b><br>${escapeHtml(gateway.location || 'Lokasi belum diisi')}<br>
-      ${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)} · ${Number(gateway.authorized_count || 0)} pengunjung aktif<br>
-      <small>Terakhir terlihat ${escapeHtml(gateway.last_seen_at ? formatTime(gateway.last_seen_at) : 'belum pernah')}</small>`);
-    state.markers.set(gateway.id,marker);
-    points.push([gateway.latitude,gateway.longitude]);
-  });
+  const placed=state.gateways.filter(gateway=>Number.isFinite(gateway.latitude) && Number.isFinite(gateway.longitude));
+  const points=placed.map(gateway=>[gateway.latitude,gateway.longitude]);
+  // Peta editor tidak dikelompokkan: titiknya harus bisa ditunjuk satu per satu
+  // untuk dipindahkan.
+  const groups=hotspotViews[mode].editable
+    ? placed.map(gateway=>({ members:[gateway] }))
+    : hotspotClusters(map,placed);
+  // Penggambaran ulang menutup popup yang sedang dibuka, jadi dilewati selama
+  // pengelompokan dan isinya masih sama. Ini juga membuat penyegaran berkala
+  // tiap lima detik tidak mengedipkan peta.
+  const signature=groups.map(group=>group.members
+    .map(member=>`${member.id}:${member.map_status}:${member.authorized_count || 0}`).join('+')).join('|');
+  if(!state.markers.size || signature!==state.clusterKey){
+    state.clusterKey=signature;
+    state.markers.forEach(marker=>marker.remove());
+    state.markers.clear();
+    groups.forEach((group,index)=>{
+      if(group.members.length===1){
+        const gateway=group.members[0];
+        const marker=L.marker([gateway.latitude,gateway.longitude],{ icon:hotspotMarkerIcon(gateway.map_status),title:gateway.name }).addTo(map);
+        marker.bindPopup(`<b>${escapeHtml(gateway.name)}</b><br>${escapeHtml(gateway.location || 'Lokasi belum diisi')}<br>
+          ${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)} · ${Number(gateway.authorized_count || 0)} pengunjung aktif<br>
+          <small>Terakhir terlihat ${escapeHtml(gateway.last_seen_at ? formatTime(gateway.last_seen_at) : 'belum pernah')}</small>`);
+        state.markers.set(gateway.id,marker);
+        return;
+      }
+      const bounds=L.latLngBounds(group.members.map(member=>[member.latitude,member.longitude]));
+      const ringkasan=hotspotClusterSummary(group.members);
+      const marker=L.marker(bounds.getCenter(),{
+        icon:hotspotClusterIcon(group.members),
+        title:`${group.members.length} hotspot berdekatan`
+      }).addTo(map);
+      marker.bindTooltip(ringkasan,{ direction:'top', offset:[0,-20], className:'hotspot-cluster-tip' });
+      marker.on('click',()=>{
+        // Titik yang koordinatnya benar-benar sama tidak akan terpisah sejauh
+        // apa pun peta diperbesar, jadi isinya dibuka sebagai daftar.
+        if(bounds.getNorthEast().equals(bounds.getSouthWest()) || map.getZoom() >= map.getMaxZoom()){
+          L.popup({ maxWidth:210, autoPanPadding:[14,14] }).setLatLng(bounds.getCenter()).setContent(ringkasan).openOn(map);
+          return;
+        }
+        map.fitBounds(bounds,{ padding:[56,56] });
+      });
+      state.markers.set(`gabungan-${index}`,marker);
+    });
+  }
   if(state.fitted) return;
   // Tampilan yang disimpan admin selalu menang; penyesuaian otomatis hanya
   // dipakai bila belum pernah disimpan.
