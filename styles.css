@@ -537,7 +537,11 @@ body.admin-view table:has(tr.empty-row){min-width:0}
 }
 
 /* Peta sebaran hotspot di puncak Data Pengunjung. */
-.hotspot-map-card{margin-bottom:18px;background:#fff;border:1px solid #e4efec;border-radius:16px;overflow:hidden}
+/* Leaflet memakai z-index sampai 1000 untuk pane dan kontrolnya, jauh di atas
+   panel notifikasi (30). Tanpa stacking context sendiri, ubin dan atribusi peta
+   menembus ke atas panel yang sedang terbuka. isolation mengurung seluruh
+   z-index internal peta di dalam kartu ini. */
+.hotspot-map-card{position:relative;z-index:0;isolation:isolate;margin-bottom:18px;background:#fff;border:1px solid #e4efec;border-radius:16px;overflow:hidden}
 .hotspot-map-header{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start;justify-content:space-between;padding:18px 22px 14px}
 .hotspot-map-header h3{margin:4px 0 5px;color:#2f3e40;font:800 17px "Plus Jakarta Sans",Arial,sans-serif}
 .hotspot-map-header p{margin:0;max-width:60ch;color:#667571;font-size:12px;line-height:1.55}
