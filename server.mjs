@@ -326,6 +326,12 @@ try {
 } catch (error) { console.error('Migrasi peran admin gagal:', error); }
 // Titik hotspot di peta. Perangkat Ruijie tidak melaporkan GPS, jadi lokasi
 // ditandai sekali oleh admin dan tersimpan di sini.
+db.exec(`CREATE TABLE IF NOT EXISTS dashboard_settings (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  map_latitude REAL, map_longitude REAL, map_zoom INTEGER,
+  updated_at TEXT, updated_by TEXT
+)`);
+db.prepare('INSERT OR IGNORE INTO dashboard_settings (id) VALUES (1)').run();
 try { db.exec('ALTER TABLE gateways ADD COLUMN latitude REAL'); } catch { /* Kolom sudah ada. */ }
 try { db.exec('ALTER TABLE gateways ADD COLUMN longitude REAL'); } catch { /* Kolom sudah ada. */ }
 
@@ -1784,6 +1790,12 @@ async function api(req, res, url) {
         : gateway.approval_status !== 'approved' ? 'pending'
         : !(gateway.last_seen_at >= offlineDeadline) ? 'offline'
         : Number(gateway.authorized_count || 0) > 0 ? 'online' : 'idle' })),
+      mapView:(() => {
+        const baris = db.prepare('SELECT map_latitude,map_longitude,map_zoom,updated_at FROM dashboard_settings WHERE id=1').get();
+        return baris && baris.map_latitude !== null && baris.map_zoom !== null
+          ? { latitude:baris.map_latitude,longitude:baris.map_longitude,zoom:baris.map_zoom,updated_at:baris.updated_at }
+          : null;
+      })(),
       portalNetworks,
       blockedGateways
     });
@@ -1811,6 +1823,27 @@ async function api(req, res, url) {
     const project = { id:`project-${id().slice(0,12)}`, name, location, created_at:new Date().toISOString() };
     db.prepare('INSERT INTO projects (id,name,location,created_at) VALUES (?,?,?,?)').run(project.id, project.name, project.location, project.created_at);
     return json(res, 201, { project });
+  }
+  // Tampilan awal peta yang dipakai bersama seluruh dashboard. Disimpan sekali
+  // oleh admin jaringan; tanpa ini peta menebak sendiri dari sebaran titik.
+  if (route === '/api/admin/map-view' && req.method === 'PATCH') {
+    const session = requireNetworkAdmin(req,res); if (!session) return;
+    const payload = await body(req);
+    if (payload.clear) {
+      db.prepare('UPDATE dashboard_settings SET map_latitude=NULL,map_longitude=NULL,map_zoom=NULL,updated_at=?,updated_by=? WHERE id=1')
+        .run(new Date().toISOString(), session.email);
+      recordAudit(req, session, 'peta.tampilan-reset', 'Mengembalikan tampilan peta ke otomatis.');
+      return json(res, 200, { ok:true,mapView:null });
+    }
+    const latitude = Number(payload.latitude), longitude = Number(payload.longitude), zoom = Math.round(Number(payload.zoom));
+    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) return json(res, 400, { error:'Latitude harus antara -90 dan 90.' });
+    if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) return json(res, 400, { error:'Longitude harus antara -180 dan 180.' });
+    if (!Number.isFinite(zoom) || zoom < 1 || zoom > 19) return json(res, 400, { error:'Tingkat zoom harus antara 1 dan 19.' });
+    const view = { latitude:Math.round(latitude * 1e6) / 1e6,longitude:Math.round(longitude * 1e6) / 1e6,zoom };
+    db.prepare('UPDATE dashboard_settings SET map_latitude=?,map_longitude=?,map_zoom=?,updated_at=?,updated_by=? WHERE id=1')
+      .run(view.latitude, view.longitude, view.zoom, new Date().toISOString(), session.email);
+    recordAudit(req, session, 'peta.tampilan-simpan', `Menyimpan tampilan awal peta pada ${view.latitude}, ${view.longitude} zoom ${view.zoom}.`);
+    return json(res, 200, { ok:true,mapView:view });
   }
   // Titik peta disimpan terpisah dari form gateway supaya sekali klik di peta
   // tidak ikut menimpa nama, lokasi, atau project yang sedang diedit admin.

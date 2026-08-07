@@ -183,6 +183,7 @@ try {
     ['POST',   '/api/admin/portal-networks',     { gatewayId:'gw-x', networkAlias:'VLAN1', portalMode:'free' }],
     ['POST',   '/api/admin/projects',            { name:'Project Baru' }],
     ['DELETE', '/api/admin/clients',             { gatewayId:'gw-x', macAddress:'aa:bb:cc:dd:ee:ff' }],
+    ['PATCH',  '/api/admin/map-view',            { latitude:-8.4, longitude:115.6, zoom:13 }],
     ['GET',    '/api/admin/team',                null],
     ['GET',    '/api/admin/audit',               null]
   ];
@@ -203,6 +204,41 @@ try {
   const petaUntukMarketing = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:marketingCookie } })).json();
   assert(petaUntukMarketing.gateways.every(gateway => gateway.map_status),
     'Marketing harus tetap menerima status peta untuk halaman pemantauan.');
+
+  // Tampilan awal peta: disimpan sekali oleh admin jaringan, dipakai semua orang.
+  const simpanTampilan = await fetch(`${baseUrl}/api/admin/map-view`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ latitude:-8.4522, longitude:115.6011, zoom:14 })
+  });
+  assert(simpanTampilan.status === 200, `Admin harus dapat menyimpan tampilan peta (dapat ${simpanTampilan.status}).`);
+
+  const zoomTerlaluBesar = await fetch(`${baseUrl}/api/admin/map-view`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ latitude:-8.4, longitude:115.6, zoom:40 })
+  });
+  assert(zoomTerlaluBesar.status === 400, `Zoom di luar 1..19 harus ditolak (dapat ${zoomTerlaluBesar.status}).`);
+
+  const denganTampilan = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:ownerCookie } })).json();
+  assert(denganTampilan.mapView && denganTampilan.mapView.zoom === 14 && Number(denganTampilan.mapView.latitude) === -8.4522,
+    'Tampilan peta yang disimpan harus ikut terkirim bersama data jaringan.');
+
+  // Marketing tidak boleh mengubahnya, tetapi tetap menerimanya agar peta
+  // pemantauan miliknya membuka di posisi yang sama.
+  const tampilanUntukMarketing = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:marketingCookie } })).json();
+  assert(tampilanUntukMarketing.mapView?.zoom === 14,
+    'Marketing harus tetap menerima tampilan peta tersimpan meski tidak boleh mengubahnya.');
+
+  const hapusTampilan = await fetch(`${baseUrl}/api/admin/map-view`, {
+    method:'PATCH', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ clear:true })
+  });
+  assert(hapusTampilan.status === 200, 'Admin harus dapat mengembalikan tampilan ke otomatis.');
+  const setelahHapus = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:ownerCookie } })).json();
+  assert(setelahHapus.mapView === null, 'Setelah direset, tampilan peta harus kembali kosong.');
+
+  const auditTampilan = await (await fetch(`${baseUrl}/api/admin/audit?limit=50`, { headers:{ cookie:ownerCookie } })).json();
+  assert(auditTampilan.entries.some(entry => entry.action === 'peta.tampilan-simpan'),
+    'Penyimpanan tampilan peta harus tercatat di jejak audit.');
 
   let throttled = false;
   for (let attempt = 0; attempt < 20; attempt += 1) {

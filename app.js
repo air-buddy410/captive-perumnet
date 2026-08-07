@@ -139,6 +139,9 @@ const hotspotViews = {
 };
 function createHotspotState() { return { map:null, markers:new Map(), gateways:[], placing:null, fitted:false }; }
 const hotspotState = { view:createHotspotState(), edit:createHotspotState() };
+// Tampilan awal peta yang disimpan admin. Bila ada, kedua peta membuka di
+// posisi itu alih-alih menebak sendiri dari sebaran titik.
+let hotspotSavedView = null;
 const hotspotEl = (mode, part) => $(`#hotspot-${part}-${mode}`);
 function mountHotspotPanel(mode) {
   const config = hotspotViews[mode];
@@ -147,8 +150,14 @@ function mountHotspotPanel(mode) {
     <section class="hotspot-map-card" id="hotspot-card-${mode}">
       <header class="hotspot-map-header">
         <div><span class="eyebrow">Sebaran jaringan</span><h3>${config.judul}</h3><p id="hotspot-subtitle-${mode}">${config.deskripsi}</p></div>
-        <div class="hotspot-legend" aria-label="Keterangan status">
-          ${['online','idle','offline','pending'].map(key=>`<span><i class="hotspot-dot ${key}"></i>${hotspotStatusLabels[key]}</span>`).join('')}
+        <div class="hotspot-header-side">
+          <div class="hotspot-legend" aria-label="Keterangan status">
+            ${['online','idle','offline','pending'].map(key=>`<span><i class="hotspot-dot ${key}"></i>${hotspotStatusLabels[key]}</span>`).join('')}
+          </div>
+          ${config.editable ? `<div class="hotspot-view-actions">
+            <button class="outline-button" id="hotspot-save-view" type="button">Simpan tampilan ini</button>
+            <button class="outline-button" id="hotspot-reset-view" type="button">Kembalikan otomatis</button>
+          </div>` : ''}
         </div>
       </header>
       <div class="hotspot-map-body">
@@ -241,11 +250,24 @@ function renderHotspotMarkers(mode) {
     state.markers.set(gateway.id,marker);
     points.push([gateway.latitude,gateway.longitude]);
   });
-  if(points.length && !state.fitted){
+  if(state.fitted) return;
+  // Tampilan yang disimpan admin selalu menang; penyesuaian otomatis hanya
+  // dipakai bila belum pernah disimpan.
+  if(hotspotSavedView){
+    state.fitted=true;
+    map.setView([hotspotSavedView.latitude,hotspotSavedView.longitude],hotspotSavedView.zoom);
+  } else if(points.length){
     state.fitted=true;
     if(points.length===1) map.setView(points[0],16);
     else map.fitBounds(points,{ padding:[36,36] });
   }
+}
+function renderHotspotViewLabel() {
+  const reset=$('#hotspot-reset-view');
+  if(reset) reset.hidden=!hotspotSavedView;
+  const subtitle=hotspotEl('edit','subtitle');
+  if(!subtitle) return;
+  subtitle.dataset.tampilan = hotspotSavedView ? 'tersimpan' : 'otomatis';
 }
 function renderHotspotSummary(mode) {
   const summary=hotspotEl(mode,'summary'); if(!summary) return;
@@ -276,6 +298,7 @@ async function loadHotspotMap(mode) {
   initHotspotMap(mode);
   const state=hotspotState[mode];
   const result=await api('/api/admin/network');
+  hotspotSavedView=result?.mapView || null;
   state.gateways=(result?.gateways || []).map(gateway=>({
     ...gateway,
     latitude:gateway.latitude===null || gateway.latitude===undefined ? null : Number(gateway.latitude),
@@ -285,13 +308,19 @@ async function loadHotspotMap(mode) {
   const total=state.gateways.filter(gateway=>gateway.id!=='unassigned').length;
   const subtitle=hotspotEl(mode,'subtitle');
   if(subtitle){
-    if(placed === total) subtitle.textContent = hotspotViews[mode].deskripsi;
-    else if(hotspotViews[mode].editable) subtitle.textContent = `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tekan "Tandai di peta" lalu klik posisinya.`;
-    else subtitle.textContent = `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tandai di halaman Project & Gateway.`;
+    const belum = total - placed;
+    const bisaEdit = hotspotViews[mode].editable;
+    let teks;
+    if(!belum) teks = hotspotViews[mode].deskripsi;
+    else if(bisaEdit) teks = `${belum} dari ${total} gateway belum ditandai lokasinya. Tekan "Tandai di peta" lalu klik posisinya.`;
+    else teks = `${belum} dari ${total} gateway belum ditandai lokasinya. Tandai di halaman Project & Gateway.`;
+    if(bisaEdit && hotspotSavedView) teks += ' Tampilan awal peta sudah disimpan.';
+    subtitle.textContent = teks;
   }
   renderHotspotSide(mode);
   renderHotspotMarkers(mode);
   renderHotspotSummary(mode);
+  if(mode==='edit') renderHotspotViewLabel();
   state.map?.invalidateSize();
 }
 function mountAdminUsersPage() {
@@ -1347,6 +1376,33 @@ if(isAdminView){
     catch(error) { setHotspotHint('edit',error.message,true); }
   });
   document.addEventListener('keydown',event=>{ if(event.key==='Escape' && hotspotState.edit.placing) setHotspotPlacing('edit',null); });
+  // Panel editor baru dibuat saat tab Project & Gateway dibuka, jadi tombolnya
+  // belum ada ketika blok ini dijalankan. Didelegasikan agar tidak bergantung
+  // pada urutan pemasangan.
+  document.addEventListener('click', async event => {
+    const simpan = event.target.closest('#hotspot-save-view');
+    const reset = event.target.closest('#hotspot-reset-view');
+    if(!simpan && !reset) return;
+    const map = hotspotState.edit.map;
+    if(!map) return;
+    try {
+      if(simpan){
+        const pusat = map.getCenter();
+        const hasil = await api('/api/admin/map-view',{ latitude:pusat.lat,longitude:pusat.lng,zoom:map.getZoom() },'PATCH');
+        hotspotSavedView = hasil?.mapView || null;
+        setHotspotHint('edit','Tampilan awal peta disimpan.');
+      } else {
+        if(!confirm('Kembalikan tampilan peta ke penyesuaian otomatis?')) return;
+        await api('/api/admin/map-view',{ clear:true },'PATCH');
+        hotspotSavedView = null;
+        setHotspotHint('edit','Tampilan kembali mengikuti sebaran titik.');
+      }
+      // Peta pemantauan ikut memakai tampilan baru tanpa perlu muat ulang.
+      hotspotState.view.fitted = false;
+      renderHotspotViewLabel();
+      loadHotspotMap('view').catch(()=>{});
+    } catch(error) { setHotspotHint('edit',error.message,true); }
+  });
   $('#audit-refresh').onclick=()=>loadAdminAudit().catch(error=>alert(error.message));
   $('#audit-prev').onclick=()=>{ if(adminTeamState.auditPage>1){ adminTeamState.auditPage-=1; loadAdminAudit().catch(error=>alert(error.message)); } };
   $('#audit-next').onclick=()=>{ if(adminTeamState.auditPage<adminTeamState.auditTotalPages){ adminTeamState.auditPage+=1; loadAdminAudit().catch(error=>alert(error.message)); } };

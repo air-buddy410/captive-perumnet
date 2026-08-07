@@ -733,3 +733,13 @@ body.admin-view table:has(tr.empty-row){min-width:0}
 /* Atribut hidden pada menu kalah oleh display:flex di .nav-item, sehingga menu
    yang seharusnya disembunyikan dari akun marketing tetap terlihat. */
 .nav-item[hidden]{display:none!important}
+/* Kontrol tampilan peta, hanya muncul pada panel yang bisa diedit. */
+.hotspot-header-side{display:flex;flex-direction:column;gap:9px;align-items:flex-end}
+.hotspot-view-actions{display:flex;flex-wrap:wrap;gap:7px;justify-content:flex-end}
+.hotspot-view-actions button{min-height:34px;padding:0 11px;font-size:11px}
+.hotspot-view-actions button[hidden]{display:none}
+@media(max-width:880px){
+  .hotspot-header-side{align-items:flex-start;width:100%}
+  .hotspot-view-actions{justify-content:flex-start}
+  .hotspot-view-actions button{min-height:44px}
+}
