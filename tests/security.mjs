@@ -159,6 +159,51 @@ try {
   const mapAudit = await (await fetch(`${baseUrl}/api/admin/audit?limit=50`, { headers:{ cookie:ownerCookie } })).json();
   assert(mapAudit.entries.some(entry => entry.action === 'gateway.titik-simpan'), 'Penandaan titik peta harus tercatat di jejak audit.');
 
+  // Akun marketing: boleh melihat data pelanggan dan peta, tetapi tidak boleh
+  // menyentuh jaringan. Ditegakkan di server, bukan sekadar menu disembunyikan.
+  const addMarketing = await fetch(`${baseUrl}/api/admin/team`, {
+    method:'POST', headers:{ 'content-type':'application/json', cookie:ownerCookie },
+    body:JSON.stringify({ email:'marketing@example.test', fullName:'Tim Marketing', password:'kata-sandi-marketing-panjang', role:'marketing' })
+  });
+  assert(addMarketing.status === 201, `Peran marketing harus dapat dibuat (dapat ${addMarketing.status}).`);
+
+  const marketingLogin = await fetch(`${baseUrl}/api/admin/login`, {
+    method:'POST', headers:{ 'content-type':'application/json' },
+    body:JSON.stringify({ email:'marketing@example.test', password:'kata-sandi-marketing-panjang' })
+  });
+  const marketingCookie = marketingLogin.headers.get('set-cookie')?.split(';')[0];
+  assert(marketingLogin.status === 200 && (await marketingLogin.json()).role === 'marketing',
+    'Akun marketing harus dapat masuk dan membawa perannya.');
+
+  const terlarang = [
+    ['POST',   '/api/admin/gateways',            { gatewayId:'gw-x', name:'X' }],
+    ['DELETE', '/api/admin/gateways',            { gatewayId:'gw-x' }],
+    ['PATCH',  '/api/admin/gateways/location',   { gatewayId:mapGateway.id, latitude:-8, longitude:115 }],
+    ['POST',   '/api/admin/gateways/approval',   { gatewayId:'gw-x' }],
+    ['POST',   '/api/admin/portal-networks',     { gatewayId:'gw-x', networkAlias:'VLAN1', portalMode:'free' }],
+    ['POST',   '/api/admin/projects',            { name:'Project Baru' }],
+    ['DELETE', '/api/admin/clients',             { gatewayId:'gw-x', macAddress:'aa:bb:cc:dd:ee:ff' }],
+    ['GET',    '/api/admin/team',                null],
+    ['GET',    '/api/admin/audit',               null]
+  ];
+  for (const [method, path, payload] of terlarang) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers:{ 'content-type':'application/json', cookie:marketingCookie },
+      body: payload ? JSON.stringify(payload) : undefined
+    });
+    assert(response.status === 403, `Marketing harus ditolak di ${method} ${path} (dapat ${response.status}).`);
+  }
+
+  // Yang tetap boleh: memantau pengunjung dan membaca peta hotspot.
+  for (const path of ['/api/admin/clients', '/api/admin/network', '/api/admin/users']) {
+    const response = await fetch(`${baseUrl}${path}`, { headers:{ cookie:marketingCookie } });
+    assert(response.ok, `Marketing harus tetap dapat membaca ${path} (status ${response.status}).`);
+  }
+  const petaUntukMarketing = await (await fetch(`${baseUrl}/api/admin/network`, { headers:{ cookie:marketingCookie } })).json();
+  assert(petaUntukMarketing.gateways.every(gateway => gateway.map_status),
+    'Marketing harus tetap menerima status peta untuk halaman pemantauan.');
+
   let throttled = false;
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const response = await fetch(`${baseUrl}/api/admin/login`, {

@@ -292,7 +292,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS admin_users (
   email TEXT NOT NULL UNIQUE,
   full_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'staff' CHECK(role IN ('owner','staff')),
+  role TEXT NOT NULL DEFAULT 'staff' CHECK(role IN ('owner','staff','marketing')),
   created_at TEXT NOT NULL,
   created_by TEXT,
   disabled_at TEXT,
@@ -309,6 +309,21 @@ db.exec(`CREATE TABLE IF NOT EXISTS admin_audit_log (
   created_at TEXT NOT NULL
 )`);
 db.exec('CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC)');
+// CHECK constraint tidak dapat diubah lewat ALTER TABLE, jadi tabel dibangun
+// ulang ketika peran marketing belum diizinkan skema lama.
+try {
+  const schema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='admin_users'").get();
+  if (schema?.sql && !schema.sql.includes('marketing')) {
+    db.exec(`CREATE TABLE admin_users_baru (
+      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL, password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'staff' CHECK(role IN ('owner','staff','marketing')),
+      created_at TEXT NOT NULL, created_by TEXT, disabled_at TEXT, last_login_at TEXT)`);
+    db.exec('INSERT INTO admin_users_baru SELECT id,email,full_name,password_hash,role,created_at,created_by,disabled_at,last_login_at FROM admin_users');
+    db.exec('DROP TABLE admin_users');
+    db.exec('ALTER TABLE admin_users_baru RENAME TO admin_users');
+    console.log('Skema akun admin dimigrasi: peran marketing tersedia.');
+  }
+} catch (error) { console.error('Migrasi peran admin gagal:', error); }
 // Titik hotspot di peta. Perangkat Ruijie tidak melaporkan GPS, jadi lokasi
 // ditandai sekali oleh admin dan tersimpan di sini.
 try { db.exec('ALTER TABLE gateways ADD COLUMN latitude REAL'); } catch { /* Kolom sudah ada. */ }
@@ -538,6 +553,16 @@ function adminSession(req) {
   } catch { return false; }
 }
 function adminCookie(value, maxAge = adminSessionSeconds()) { return `perumnet_admin=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAge}${config.baseUrl.startsWith('https:') ? '; Secure' : ''}`; }
+// Marketing hanya mengelola data pelanggan dan konten portal. Seluruh
+// perubahan jaringan - gateway, titik peta, routing, project - tertutup, dan
+// ditegakkan di server, bukan sekadar disembunyikan di antarmuka.
+const managesNetwork = session => session?.role === 'owner' || session?.role === 'staff';
+function requireNetworkAdmin(req, res) {
+  const session = currentAdmin(req, res);
+  if (!session) return null;
+  if (!managesNetwork(session)) { json(res, 403, { error:'Akun marketing tidak memiliki akses ke pengelolaan jaringan.' }); return null; }
+  return session;
+}
 function currentAdmin(req, res) {
   const session = adminSession(req);
   if (!session) { json(res, 401, { error: 'Sesi admin diperlukan.' }); return null; }
@@ -1657,6 +1682,7 @@ async function api(req, res, url) {
   if (route === '/api/admin/team') {
     const session = adminSession(req);
     if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' });
+    if (!managesNetwork(session)) return json(res, 403, { error:'Akun marketing tidak memiliki akses ke pengelolaan tim.' });
     const isOwner = session.role === 'owner';
     if (req.method === 'GET') {
       const members = db.prepare(`SELECT id,email,full_name,role,created_at,last_login_at,disabled_at
@@ -1669,7 +1695,7 @@ async function api(req, res, url) {
       const email = String(payload.email ?? '').toLowerCase().trim().slice(0,254);
       const fullName = String(payload.fullName ?? '').trim().replace(/\s+/g,' ').slice(0,120);
       const password = String(payload.password ?? '');
-      const role = payload.role === 'owner' ? 'owner' : 'staff';
+      const role = ['owner','marketing','staff'].includes(payload.role) ? payload.role : 'staff';
       if (fullName.length < 2) return json(res, 400, { error:'Nama minimal 2 karakter.' });
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error:'Format email tidak valid.' });
       if (password.length < 12) return json(res, 400, { error:'Kata sandi admin minimal 12 karakter.' });
@@ -1700,7 +1726,7 @@ async function api(req, res, url) {
         recordAudit(req, session, 'tim.ubah', `Mengubah nama ${target.full_name} menjadi ${fullName}.`);
       }
       if (isOwner && payload.role !== undefined && !editingSelf) {
-        const role = payload.role === 'owner' ? 'owner' : 'staff';
+        const role = ['owner','marketing','staff'].includes(payload.role) ? payload.role : 'staff';
         db.prepare('UPDATE admin_users SET role=? WHERE id=?').run(role, target.id);
         recordAudit(req, session, 'tim.ubah-peran', `Peran ${target.full_name} menjadi ${role}.`);
       }
@@ -1720,6 +1746,7 @@ async function api(req, res, url) {
   if (route === '/api/admin/audit' && req.method === 'GET') {
     const session = adminSession(req);
     if (!session) return json(res, 401, { error:'Sesi admin diperlukan.' });
+    if (!managesNetwork(session)) return json(res, 403, { error:'Akun marketing tidak memiliki akses ke jejak audit.' });
     const limit = Math.min(200, Math.max(10, Number(url.searchParams.get('limit')) || 50));
     const page = Math.max(1, Number(url.searchParams.get('page')) || 1);
     const total = db.prepare('SELECT COUNT(*) n FROM admin_audit_log').get().n;
@@ -1776,7 +1803,7 @@ async function api(req, res, url) {
     return writeReportPdf(res,reportData(url));
   }
   if (route === '/api/admin/projects' && req.method === 'POST') {
-    if (!requireAdmin(req,res)) return;
+    if (!requireNetworkAdmin(req,res)) return;
     const payload = await body(req);
     const name = String(payload.name || '').trim().slice(0,120);
     const location = String(payload.location || '').trim().slice(0,180) || null;
@@ -1788,7 +1815,7 @@ async function api(req, res, url) {
   // Titik peta disimpan terpisah dari form gateway supaya sekali klik di peta
   // tidak ikut menimpa nama, lokasi, atau project yang sedang diedit admin.
   if (route === '/api/admin/gateways/location' && req.method === 'PATCH') {
-    const session = currentAdmin(req,res); if (!session) return;
+    const session = requireNetworkAdmin(req,res); if (!session) return;
     const payload = await body(req);
     const gatewayId = gatewayKey(payload.gatewayId);
     const gateway = db.prepare('SELECT id,name FROM gateways WHERE id=?').get(gatewayId);
@@ -1808,7 +1835,7 @@ async function api(req, res, url) {
     return json(res, 200, { ok:true,...rounded });
   }
   if (route === '/api/admin/gateways' && req.method === 'POST') {
-    if (!requireAdmin(req,res)) return;
+    if (!requireNetworkAdmin(req,res)) return;
     const payload = await body(req);
     if (!payload.gatewayId) return json(res, 400, { error:'ID gateway wajib diisi.' });
     const gatewayId = gatewayKey(payload.gatewayId);
@@ -1826,7 +1853,7 @@ async function api(req, res, url) {
     return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
   }
   if (route === '/api/admin/gateways/approval' && req.method === 'POST') {
-    if (!requireAdmin(req,res)) return;
+    if (!requireNetworkAdmin(req,res)) return;
     const payload = await body(req);
     const gatewayId = gatewayKey(payload.gatewayId);
     if (gatewayId === 'unassigned') return json(res, 400, { error:'Gateway sistem tidak dapat diverifikasi.' });
@@ -1837,7 +1864,7 @@ async function api(req, res, url) {
     return json(res, 200, { gateway:db.prepare('SELECT * FROM gateways WHERE id=?').get(gatewayId) });
   }
   if (route === '/api/admin/gateways' && req.method === 'DELETE') {
-    const session = currentAdmin(req,res); if (!session) return;
+    const session = requireNetworkAdmin(req,res); if (!session) return;
     const payload = await body(req);
     const result = deleteAndBlockGateway(payload.gatewayId);
     if (result.error) return json(res, result.status, { error:result.error });
@@ -1845,7 +1872,7 @@ async function api(req, res, url) {
     return json(res, 200, result);
   }
   if (route === '/api/admin/gateway-blocks' && req.method === 'DELETE') {
-    if (!requireAdmin(req,res)) return;
+    if (!requireNetworkAdmin(req,res)) return;
     const payload = await body(req);
     const gatewayId = gatewayKey(payload.gatewayId);
     if (gatewayId === 'unassigned') return json(res, 400, { error:'ID gateway tidak valid.' });
@@ -1854,7 +1881,7 @@ async function api(req, res, url) {
     return json(res, 200, { ok:true, gatewayId, message:'Blokir dibuka. Request berikutnya akan masuk sebagai gateway pending.' });
   }
   if (route === '/api/admin/gateway-blocks/archive' && req.method === 'POST') {
-    if (!requireAdmin(req,res)) return;
+    if (!requireNetworkAdmin(req,res)) return;
     const payload = await body(req);
     const gatewayId = gatewayKey(payload.gatewayId);
     if (gatewayId === 'unassigned') return json(res, 400, { error:'ID gateway tidak valid.' });
@@ -1863,7 +1890,7 @@ async function api(req, res, url) {
     return json(res, 200, { ok:true,gatewayId,blocked:true,message:'Catatan gateway dihapus dari dashboard. ID tetap diblokir agar tidak dapat mendaftar kembali.' });
   }
   if (route === '/api/admin/portal-networks' && req.method === 'POST') {
-    if (!requireAdmin(req,res)) return;
+    if (!requireNetworkAdmin(req,res)) return;
     const payload = await body(req);
     const gatewayId = gatewayKey(payload.gatewayId);
     const networkAlias = normalizeNetworkAlias(payload.networkAlias);
@@ -2107,7 +2134,7 @@ async function api(req, res, url) {
     return json(res, 200, { ok:true });
   }
   if (route === '/api/admin/clients' && req.method === 'DELETE') {
-    const session = currentAdmin(req,res); if (!session) return;
+    const session = requireNetworkAdmin(req,res); if (!session) return;
     const { gatewayId, macAddress } = await body(req);
     if (!gatewayId) return json(res, 400, { error:'Identitas gateway diperlukan agar data perangkat yang tepat dapat dihapus.' });
     const result = deleteClientRecords(gatewayId, macAddress);

@@ -35,7 +35,7 @@ function mountAdminTeamPage() {
           <label>Nama lengkap<input name="fullName" placeholder="Contoh: Budi Santoso" required /></label>
           <label>Email<input name="email" type="email" placeholder="nama@perumnet.id" required /></label>
           <label>Kata sandi<input name="password" type="password" placeholder="Minimal 12 karakter" minlength="12" required /></label>
-          <label>Peran<select name="role"><option value="staff" selected>Staf</option><option value="owner">Pemilik</option></select></label>
+          <label>Peran<select name="role"><option value="staff" selected>Staf</option><option value="marketing">Marketing</option><option value="owner">Pemilik</option></select></label>
           <p class="inline-feedback" id="team-form-feedback" role="alert"></p>
           <div class="team-form-actions"><button class="primary-button" type="submit">Simpan Anggota</button><button class="outline-button" type="button" id="cancel-team-member">Batal</button></div>
         </form>
@@ -84,12 +84,13 @@ function renderAdminTeam() {
     const actions = [];
     if(canManage && !self) actions.push(`<button class="outline-button" data-team-toggle="${escapeHtml(member.id)}" data-disabled="${disabled ? '1' : '0'}">${disabled ? 'Aktifkan' : 'Nonaktifkan'}</button>`);
     if(canManage || self) actions.push(`<button class="outline-button" data-team-password="${escapeHtml(member.id)}">Ganti kata sandi</button>`);
-    if(canManage && !self) actions.push(`<button class="outline-button" data-team-role="${escapeHtml(member.id)}" data-role="${escapeHtml(member.role)}">Jadikan ${member.role === 'owner' ? 'staff' : 'owner'}</button>`);
+    const peranBerikut = { staff:'marketing',marketing:'owner',owner:'staff' }[member.role] || 'staff';
+    if(canManage && !self) actions.push(`<button class="outline-button" data-team-role="${escapeHtml(member.id)}" data-role="${escapeHtml(peranBerikut)}">Jadikan ${escapeHtml(peranBerikut)}</button>`);
     return `<article class="team-member${disabled ? ' disabled' : ''}">
       <div class="team-member-identity">
         <b>${escapeHtml(member.full_name)}${self ? ' <em>(Anda)</em>' : ''}</b>
         <small>${escapeHtml(member.email)}</small>
-        <span class="team-role team-role-${escapeHtml(member.role)}">${member.role === 'owner' ? 'Pemilik' : 'Staf'}</span>
+        <span class="team-role team-role-${escapeHtml(member.role)}">${({ owner:'Pemilik',marketing:'Marketing' })[member.role] || 'Staf'}</span>
         ${disabled ? '<span class="team-role team-role-disabled">Nonaktif</span>' : ''}
       </div>
       <div class="team-member-meta"><small>Login terakhir</small><b>${member.last_login_at ? escapeHtml(formatTime(member.last_login_at)) : 'Belum pernah'}</b></div>
@@ -117,28 +118,46 @@ async function loadAdminAudit() {
     </tr>`;
   }).join('') : '<tr class="empty-row"><td colspan="5" class="empty-state">Belum ada aktivitas tercatat.</td></tr>';
 }
-// Peta sebaran hotspot di puncak Data Pengunjung. Perangkat Ruijie tidak
-// melaporkan GPS, jadi titiknya ditandai sekali oleh admin lalu statusnya
-// mengikuti heartbeat dan jumlah pengunjung secara otomatis.
+// Peta sebaran hotspot. Dua instance: halaman utama hanya menampilkan status,
+// sedangkan penandaan titik dipindah ke Project & Gateway bersama pengelolaan
+// gateway lainnya, supaya halaman utama tetap murni untuk memantau.
+// Peran akun menentukan menu mana yang ada. Penegakan sebenarnya di server;
+// ini hanya agar antarmuka tidak menawarkan yang tidak bisa dipakai.
+let adminCanManageNetwork = true;
+function applyAdminRole(role) {
+  adminCanManageNetwork = role !== 'marketing';
+  document.querySelectorAll('.nav-item').forEach(item=>{
+    if(['network','team'].includes(item.dataset.tab)) item.hidden = !adminCanManageNetwork;
+  });
+}
 const hotspotStatusLabels = { online:'Online',idle:'Tanpa pengunjung',offline:'Offline',pending:'Menunggu verifikasi' };
-const hotspotMapState = { map:null, markers:new Map(), gateways:[], placing:null, fitted:false };
-function mountHotspotMapPanel() {
-  if($('#hotspot-map-card') || !$('#leads-tab')) return;
-  $('#leads-tab').insertAdjacentHTML('afterbegin',`
-    <section class="hotspot-map-card" id="hotspot-map-card">
+const hotspotViews = {
+  view:{ host:'#leads-tab', editable:false, judul:'Peta Titik Hotspot',
+    deskripsi:'Status mengikuti heartbeat gateway dan jumlah pengunjung yang sedang terhubung.' },
+  edit:{ host:'#network-tab', editable:true, judul:'Titik Hotspot di Peta',
+    deskripsi:'Tandai posisi setiap gateway agar muncul di peta halaman Data Pengunjung.' }
+};
+function createHotspotState() { return { map:null, markers:new Map(), gateways:[], placing:null, fitted:false }; }
+const hotspotState = { view:createHotspotState(), edit:createHotspotState() };
+const hotspotEl = (mode, part) => $(`#hotspot-${part}-${mode}`);
+function mountHotspotPanel(mode) {
+  const config = hotspotViews[mode];
+  if(hotspotEl(mode,'card') || !$(config.host)) return;
+  $(config.host).insertAdjacentHTML('afterbegin',`
+    <section class="hotspot-map-card" id="hotspot-card-${mode}">
       <header class="hotspot-map-header">
-        <div><span class="eyebrow">Sebaran jaringan</span><h3>Peta Titik Hotspot</h3><p id="hotspot-map-subtitle">Status mengikuti heartbeat gateway dan jumlah pengunjung yang sedang terhubung.</p></div>
+        <div><span class="eyebrow">Sebaran jaringan</span><h3>${config.judul}</h3><p id="hotspot-subtitle-${mode}">${config.deskripsi}</p></div>
         <div class="hotspot-legend" aria-label="Keterangan status">
           ${['online','idle','offline','pending'].map(key=>`<span><i class="hotspot-dot ${key}"></i>${hotspotStatusLabels[key]}</span>`).join('')}
         </div>
       </header>
       <div class="hotspot-map-body">
-        <div id="hotspot-map" role="application" aria-label="Peta titik hotspot"></div>
-        <aside class="hotspot-side" id="hotspot-side"><p class="empty-state">Memuat gateway…</p></aside>
+        <div id="hotspot-map-${mode}" role="application" aria-label="Peta titik hotspot"></div>
+        <aside class="hotspot-side" id="hotspot-side-${mode}"><p class="empty-state">Memuat gateway…</p></aside>
       </div>
       <footer class="hotspot-footer">
-        <div class="hotspot-summary" id="hotspot-summary"></div>
-        <p class="hotspot-hint" id="hotspot-hint" role="status"></p>
+        <div class="hotspot-summary" id="hotspot-summary-${mode}"></div>
+        <p class="hotspot-hint" id="hotspot-hint-${mode}" role="status"></p>
       </footer>
     </section>`);
 }
@@ -146,46 +165,54 @@ function hotspotMarkerIcon(status) {
   return L.divIcon({ className:'', iconSize:[20,20], iconAnchor:[10,10], popupAnchor:[0,-12],
     html:`<span class="hotspot-marker ${status}"></span>` });
 }
-function initHotspotMap() {
-  if(hotspotMapState.map || typeof L === 'undefined' || !$('#hotspot-map')) return;
-  // Titik tengah awal di Indonesia; peta otomatis menyesuaikan begitu ada pin.
-  const map = L.map('hotspot-map',{ scrollWheelZoom:false }).setView([-8.65,115.216],11);
+function initHotspotMap(mode) {
+  const state = hotspotState[mode];
+  if(state.map || typeof L === 'undefined' || !hotspotEl(mode,'map')) return;
+  const map = L.map(`hotspot-map-${mode}`,{ scrollWheelZoom:false }).setView([-8.65,115.216],11);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{
     maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a>'
   }).addTo(map);
-  map.on('click', async event => {
-    if(!hotspotMapState.placing) return;
-    const gatewayId = hotspotMapState.placing;
-    const { lat,lng } = event.latlng;
-    try {
-      await api('/api/admin/gateways/location',{ gatewayId,latitude:lat,longitude:lng },'PATCH');
-      setHotspotPlacing(null);
-      await loadHotspotMap();
-      setHotspotHint('Titik tersimpan.');
-    } catch(error) { setHotspotHint(error.message,true); }
-  });
-  hotspotMapState.map = map;
+  if(hotspotViews[mode].editable){
+    map.on('click', async event => {
+      if(!state.placing) return;
+      const gatewayId = state.placing;
+      const { lat,lng } = event.latlng;
+      try {
+        await api('/api/admin/gateways/location',{ gatewayId,latitude:lat,longitude:lng },'PATCH');
+        setHotspotPlacing(mode,null);
+        await loadHotspotMap(mode);
+        setHotspotHint(mode,'Titik tersimpan.');
+      } catch(error) { setHotspotHint(mode,error.message,true); }
+    });
+  }
+  state.map = map;
 }
-function setHotspotHint(message='',isError=false) {
-  const hint=$('#hotspot-hint'); if(!hint) return;
+function setHotspotHint(mode,message='',isError=false) {
+  const hint=hotspotEl(mode,'hint'); if(!hint) return;
   hint.textContent=message; hint.classList.toggle('error',isError);
 }
-function setHotspotPlacing(gatewayId) {
-  hotspotMapState.placing = gatewayId;
-  $('#hotspot-map')?.classList.toggle('placing',!!gatewayId);
-  renderHotspotSide();
+function setHotspotPlacing(mode,gatewayId) {
+  const state=hotspotState[mode];
+  state.placing=gatewayId;
+  hotspotEl(mode,'map')?.classList.toggle('placing',!!gatewayId);
+  renderHotspotSide(mode);
   if(gatewayId){
-    const gateway=hotspotMapState.gateways.find(item=>item.id===gatewayId);
-    setHotspotHint(`Klik posisi ${gateway?.name || gatewayId} di peta. Tekan Esc untuk batal.`);
-  } else setHotspotHint('');
+    const gateway=state.gateways.find(item=>item.id===gatewayId);
+    setHotspotHint(mode,`Klik posisi ${gateway?.name || gatewayId} di peta. Tekan Esc untuk batal.`);
+  } else setHotspotHint(mode,'');
 }
-function renderHotspotSide() {
-  const side=$('#hotspot-side'); if(!side) return;
-  const rows=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned');
+function renderHotspotSide(mode) {
+  const side=hotspotEl(mode,'side'); if(!side) return;
+  const state=hotspotState[mode], editable=hotspotViews[mode].editable;
+  const rows=state.gateways.filter(gateway=>gateway.id!=='unassigned');
   if(!rows.length){ side.innerHTML='<p class="empty-state">Belum ada gateway terdaftar.</p>'; return; }
   side.innerHTML=rows.map(gateway=>{
     const placed=Number.isFinite(gateway.latitude) && Number.isFinite(gateway.longitude);
-    const placing=hotspotMapState.placing===gateway.id;
+    const placing=state.placing===gateway.id;
+    const actions = editable ? `<div class="hotspot-item-actions">
+        <button class="outline-button" data-hotspot-place="${escapeHtml(gateway.id)}">${placing ? 'Batal' : placed ? 'Pindahkan titik' : 'Tandai di peta'}</button>
+        ${placed ? `<button class="outline-button" data-hotspot-clear="${escapeHtml(gateway.id)}">Hapus titik</button>` : ''}
+      </div>` : '';
     return `<article class="hotspot-item${placed ? '' : ' unplaced'}">
       <div class="hotspot-item-head">
         <i class="hotspot-dot ${escapeHtml(gateway.map_status)}"></i>
@@ -194,60 +221,35 @@ function renderHotspotSide() {
       <div class="hotspot-item-meta">
         <span>${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)}</span>
         <span>${Number(gateway.authorized_count || 0)} pengunjung aktif</span>
+        ${!editable && !placed ? '<span class="hotspot-unplaced-note">Titik belum ditandai</span>' : ''}
       </div>
-      <div class="hotspot-item-actions">
-        <button class="outline-button" data-hotspot-place="${escapeHtml(gateway.id)}">${placing ? 'Batal' : placed ? 'Pindahkan titik' : 'Tandai di peta'}</button>
-        ${placed ? `<button class="outline-button" data-hotspot-clear="${escapeHtml(gateway.id)}">Hapus titik</button>` : ''}
-      </div>
+      ${actions}
     </article>`;
   }).join('');
 }
-function renderHotspotMarkers() {
-  const map=hotspotMapState.map; if(!map) return;
-  hotspotMapState.markers.forEach(marker=>marker.remove());
-  hotspotMapState.markers.clear();
+function renderHotspotMarkers(mode) {
+  const state=hotspotState[mode], map=state.map; if(!map) return;
+  state.markers.forEach(marker=>marker.remove());
+  state.markers.clear();
   const points=[];
-  hotspotMapState.gateways.forEach(gateway=>{
+  state.gateways.forEach(gateway=>{
     if(!Number.isFinite(gateway.latitude) || !Number.isFinite(gateway.longitude)) return;
     const marker=L.marker([gateway.latitude,gateway.longitude],{ icon:hotspotMarkerIcon(gateway.map_status),title:gateway.name }).addTo(map);
     marker.bindPopup(`<b>${escapeHtml(gateway.name)}</b><br>${escapeHtml(gateway.location || 'Lokasi belum diisi')}<br>
       ${escapeHtml(hotspotStatusLabels[gateway.map_status] || gateway.map_status)} · ${Number(gateway.authorized_count || 0)} pengunjung aktif<br>
       <small>Terakhir terlihat ${escapeHtml(gateway.last_seen_at ? formatTime(gateway.last_seen_at) : 'belum pernah')}</small>`);
-    hotspotMapState.markers.set(gateway.id,marker);
+    state.markers.set(gateway.id,marker);
     points.push([gateway.latitude,gateway.longitude]);
   });
-  // Sekali saja: setelah admin menggeser peta, jangan dipaksa balik tiap refresh.
-  if(points.length && !hotspotMapState.fitted){
-    hotspotMapState.fitted=true;
+  if(points.length && !state.fitted){
+    state.fitted=true;
     if(points.length===1) map.setView(points[0],16);
     else map.fitBounds(points,{ padding:[36,36] });
   }
 }
-async function loadHotspotMap() {
-  if(!isAdminView) return;
-  mountHotspotMapPanel();
-  initHotspotMap();
-  const result=await api('/api/admin/network');
-  hotspotMapState.gateways=(result?.gateways || []).map(gateway=>({
-    ...gateway,
-    latitude:gateway.latitude===null || gateway.latitude===undefined ? null : Number(gateway.latitude),
-    longitude:gateway.longitude===null || gateway.longitude===undefined ? null : Number(gateway.longitude)
-  }));
-  const placed=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned' && Number.isFinite(gateway.latitude)).length;
-  const total=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned').length;
-  $('#hotspot-map-subtitle').textContent = placed === total
-    ? 'Status mengikuti heartbeat gateway dan jumlah pengunjung yang sedang terhubung.'
-    : `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tekan "Tandai di peta" lalu klik posisinya.`;
-  renderHotspotSide();
-  renderHotspotMarkers();
-  renderHotspotSummary();
-  hotspotMapState.map?.invalidateSize();
-}
-// Baris di bawah peta sebelumnya hanya menampung pesan sesekali dan menyisakan
-// ruang kosong, jadi diisi ringkasan yang selalu relevan.
-function renderHotspotSummary() {
-  const summary=$('#hotspot-summary'); if(!summary) return;
-  const rows=hotspotMapState.gateways.filter(gateway=>gateway.id!=='unassigned');
+function renderHotspotSummary(mode) {
+  const summary=hotspotEl(mode,'summary'); if(!summary) return;
+  const rows=hotspotState[mode].gateways.filter(gateway=>gateway.id!=='unassigned');
   const count=status=>rows.filter(gateway=>gateway.map_status===status).length;
   const visitors=rows.reduce((total,gateway)=>total+Number(gateway.authorized_count || 0),0);
   const chips=[`<b>${rows.length}</b> hotspot`];
@@ -257,6 +259,31 @@ function renderHotspotSummary() {
   });
   chips.push(`<b>${visitors}</b> pengunjung aktif`);
   summary.innerHTML=chips.map(chip=>`<span>${chip}</span>`).join('');
+}
+async function loadHotspotMap(mode) {
+  if(!isAdminView) return;
+  if(mode==='edit' && !adminCanManageNetwork) return;
+  mountHotspotPanel(mode);
+  initHotspotMap(mode);
+  const state=hotspotState[mode];
+  const result=await api('/api/admin/network');
+  state.gateways=(result?.gateways || []).map(gateway=>({
+    ...gateway,
+    latitude:gateway.latitude===null || gateway.latitude===undefined ? null : Number(gateway.latitude),
+    longitude:gateway.longitude===null || gateway.longitude===undefined ? null : Number(gateway.longitude)
+  }));
+  const placed=state.gateways.filter(gateway=>gateway.id!=='unassigned' && Number.isFinite(gateway.latitude)).length;
+  const total=state.gateways.filter(gateway=>gateway.id!=='unassigned').length;
+  const subtitle=hotspotEl(mode,'subtitle');
+  if(subtitle){
+    if(placed === total) subtitle.textContent = hotspotViews[mode].deskripsi;
+    else if(hotspotViews[mode].editable) subtitle.textContent = `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tekan "Tandai di peta" lalu klik posisinya.`;
+    else subtitle.textContent = `${total - placed} dari ${total} gateway belum ditandai lokasinya. Tandai di halaman Project & Gateway.`;
+  }
+  renderHotspotSide(mode);
+  renderHotspotMarkers(mode);
+  renderHotspotSummary(mode);
+  state.map?.invalidateSize();
 }
 function mountAdminUsersPage() {
   if($('#users-tab')) return;
@@ -360,7 +387,7 @@ function mountPortalContentStudio() {
 }
 mountAdminUsersPage();
 mountAdminTeamPage();
-mountHotspotMapPanel();
+mountHotspotPanel('view');
 mountPortalContentStudio();
 applyCanonicalPortalLinks();
 if (isAdminView) { document.body.classList.add('admin-view'); $('#portal-screen').style.display = 'none'; }
@@ -1239,14 +1266,16 @@ async function loadAdminNetwork() {
 }
 function activeAdminTab() { return document.querySelector('.tab-content.active')?.id.replace(/-tab$/,'') || ''; }
 function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
-  const tab=['leads','users','network','team','settings'].includes(requestedTab) ? requestedTab : 'leads';
+  let tab=['leads','users','network','team','settings'].includes(requestedTab) ? requestedTab : 'leads';
+  // Akun marketing tidak punya menu ini; URL langsung pun dikembalikan.
+  if(!adminCanManageNetwork && ['network','team'].includes(tab)) tab='leads';
   if(tab!=='settings' && activeAdminTab()==='settings' && !confirmDiscardPortalEditor()) return;
   document.querySelectorAll('.nav-item').forEach(item=>item.classList.toggle('active',item.dataset.tab===tab));
   document.querySelectorAll('.tab-content').forEach(content=>content.classList.toggle('active',content.id===`${tab}-tab`));
   $('#dash-title').textContent={ leads:'Data Pengunjung',users:'Data Pengguna',network:'Project & Gateway',team:'Tim & Audit',settings:'Pengaturan Portal' }[tab];
   if(updateHash) history.replaceState({},'',tab==='leads' ? '/admin' : `/admin#${tab}`);
-  if(tab==='network') loadAdminNetwork().catch(error=>alert(error.message));
-  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true }),loadAdminReport({ silent:true }),loadHotspotMap().catch(()=>{})]);
+  if(tab==='network') Promise.all([loadAdminNetwork(),loadHotspotMap('edit')]).catch(error=>alert(error.message));
+  if(tab==='leads') Promise.all([loadAdminLeads({ silent:true }),loadAdminMonitoring({ silent:true }),loadAdminReport({ silent:true }),loadHotspotMap('view').catch(()=>{})]);
   if(tab==='users') loadAdminUsers({ silent:true });
   if(tab==='team') { $('#team-form').hidden=true; loadAdminTeam().catch(error=>alert(error.message)); }
   if(tab!=='users') closeAdminUserEditor();
@@ -1255,7 +1284,7 @@ function activateAdminTab(requestedTab='leads',{ updateHash=true }={}) {
 }
 renderLeads();
 loadPortalSettings().finally(()=>{ if(connectedCallbackAccess!==null) applyConnectedCopy(connectedCallbackAccess); });
-async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); $('#admin-email').textContent = session.email; $('#admin-email').title=`Sesi berakhir ${new Date(session.expiresAt).toLocaleString('id-ID')}`; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadAdminReport(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); activateAdminTab(location.hash.slice(1) || 'leads',{ updateHash:false }); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
+async function restoreAdminSession() { if (!isAdminView) return; try { const session = await api('/api/admin/session'); applyAdminRole(session.role); $('#admin-email').textContent = session.email; $('#admin-email').title=`Sesi berakhir ${new Date(session.expiresAt).toLocaleString('id-ID')}`; await loadAdminNetwork(); await Promise.all([loadAdminLeads(),loadAdminMonitoring(),loadAdminReport(),loadNotifications()]); updateAdminRefreshStatus('live'); show('dashboard'); activateAdminTab(location.hash.slice(1) || 'leads',{ updateHash:false }); startNotificationPolling(); startMonitoringPolling(); } catch { show('login'); } }
 restoreAdminSession();
 if (passwordResetToken) show('resetPassword');
 if (verificationToken) { api('/api/auth/verify', { token:verificationToken }).then(() => { verificationToken=''; clearAccountActionUrl(); showAccountStatus('Email berhasil diverifikasi.','Kembali ke jendela login WiFi pada perangkat Anda untuk masuk menggunakan email dan kata sandi.'); }).catch(error => { clearAccountActionUrl(); showAccountStatus('Verifikasi tidak berhasil.',error.message,false); }); }
@@ -1293,22 +1322,22 @@ if(isAdminView){
         await api('/api/admin/team',{ memberId:password.dataset.teamPassword,password:value },'PATCH');
         alert('Kata sandi diperbarui. Sesi anggota tersebut telah diputus.');
       } else if(role){
-        const next=role.dataset.role==='owner' ? 'staff' : 'owner';
+        const next=role.dataset.role;
         if(!confirm(`Ubah peran anggota ini menjadi ${next}?`)) return;
         await api('/api/admin/team',{ memberId:role.dataset.teamRole,role:next },'PATCH');
       } else return;
       await loadAdminTeam();
     } catch(error) { alert(error.message); }
   });
-  $('#hotspot-side').addEventListener('click', async event => {
+  document.addEventListener('click', async event => {
     const place=event.target.closest('[data-hotspot-place]'), clear=event.target.closest('[data-hotspot-clear]');
-    if(place){ setHotspotPlacing(hotspotMapState.placing===place.dataset.hotspotPlace ? null : place.dataset.hotspotPlace); return; }
+    if(place){ setHotspotPlacing('edit',hotspotState.edit.placing===place.dataset.hotspotPlace ? null : place.dataset.hotspotPlace); return; }
     if(!clear) return;
     if(!confirm('Hapus titik peta gateway ini?')) return;
-    try { await api('/api/admin/gateways/location',{ gatewayId:clear.dataset.hotspotClear,clear:true },'PATCH'); await loadHotspotMap(); setHotspotHint('Titik dihapus.'); }
-    catch(error) { setHotspotHint(error.message,true); }
+    try { await api('/api/admin/gateways/location',{ gatewayId:clear.dataset.hotspotClear,clear:true },'PATCH'); await loadHotspotMap('edit'); setHotspotHint('edit','Titik dihapus.'); }
+    catch(error) { setHotspotHint('edit',error.message,true); }
   });
-  document.addEventListener('keydown',event=>{ if(event.key==='Escape' && hotspotMapState.placing) setHotspotPlacing(null); });
+  document.addEventListener('keydown',event=>{ if(event.key==='Escape' && hotspotState.edit.placing) setHotspotPlacing('edit',null); });
   $('#audit-refresh').onclick=()=>loadAdminAudit().catch(error=>alert(error.message));
   $('#audit-prev').onclick=()=>{ if(adminTeamState.auditPage>1){ adminTeamState.auditPage-=1; loadAdminAudit().catch(error=>alert(error.message)); } };
   $('#audit-next').onclick=()=>{ if(adminTeamState.auditPage<adminTeamState.auditTotalPages){ adminTeamState.auditPage+=1; loadAdminAudit().catch(error=>alert(error.message)); } };

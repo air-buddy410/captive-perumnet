@@ -717,3 +717,10 @@ body.admin-view table:has(tr.empty-row){min-width:0}
   body.admin-view .profile-row-actions button,body.admin-view .edit-profile,body.admin-view .delete-profile{min-height:44px;font-size:11px}
   .forgot-password-link{display:flex;width:fit-content;min-height:44px;padding:12px 4px;align-items:center}
 }
+
+/* Peta halaman utama bersifat hanya-lihat; penandaan titik ada di Project & Gateway. */
+.hotspot-unplaced-note{color:#8a6d3b;font-weight:600}
+.team-role-marketing{color:#8a5a2b;background:#fbf0e3}
+/* Atribut hidden pada menu kalah oleh display:flex di .nav-item, sehingga menu
+   yang seharusnya disembunyikan dari akun marketing tetap terlihat. */
+.nav-item[hidden]{display:none!important}
