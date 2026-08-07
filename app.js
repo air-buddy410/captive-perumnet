@@ -260,6 +260,15 @@ function renderHotspotSummary(mode) {
   chips.push(`<b>${visitors}</b> pengunjung aktif`);
   summary.innerHTML=chips.map(chip=>`<span>${chip}</span>`).join('');
 }
+// Leaflet tidak tahu wadahnya berubah ukuran, jadi setelah jendela diubah
+// peta hanya menggambar sebagian dan menyisakan area kosong.
+let hotspotResizeTimer;
+window.addEventListener('resize', () => {
+  clearTimeout(hotspotResizeTimer);
+  hotspotResizeTimer = setTimeout(() => {
+    Object.values(hotspotState).forEach(state => state.map?.invalidateSize());
+  }, 180);
+});
 async function loadHotspotMap(mode) {
   if(!isAdminView) return;
   if(mode==='edit' && !adminCanManageNetwork) return;
